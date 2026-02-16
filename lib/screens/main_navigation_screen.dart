@@ -1,6 +1,6 @@
 // Caminho: lib/screens/main_navigation_screen.dart
 // Descrição: Controlador mestre (Single Page Application na Web, Navegação Híbrida).
-// ATUALIZAÇÃO: Motor Reativo de Fila Injetado. Botão de Sincronizar Global Mobile Removido.
+// ATUALIZAÇÃO: Inclusão do Cadeado de Segurança (Role Check) para áreas Admin.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -34,7 +34,7 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  int _paginaAtual = 0; // Índice que controla o conteúdo central
+  int _paginaAtual = 0;
   final _firestore = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
 
@@ -45,21 +45,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _inicializarProcessos() async {
-    // 1. Inicia a Inteligência do Background (Ouve a fila e a internet)
     SincronizacaoService.inicializarMotorReativo();
-
     await Future.delayed(const Duration(seconds: 1));
     if (mounted) _verificarConvitesPendentes();
   }
 
-  // Lógica agora usada EXCLUSIVAMENTE pelo botão do Menu Lateral na Web
   Future<void> _executarSyncManual() async {
-    // Não mostra o pop-up travando a tela, apenas avisa se houver erro ou dá o feedback final.
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
       if (!mounted) return;
 
-      // Força a atualização dos gráficos após a sincronização
       Provider.of<DashboardProvider>(context, listen: false).atualizar();
 
       if (resultado.contains('Erro') || resultado.contains('Sem internet')) {
@@ -74,28 +69,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         );
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted)
         AppFeedback.show(
           context,
           "Erro ao conectar com a nuvem.",
           isError: true,
         );
-      }
     }
   }
 
-  // --- NOVA LÓGICA DE NAVEGAÇÃO INTERNA (WEB) ---
   void _navegarParaIndice(int index) {
     setState(() {
       _paginaAtual = index;
     });
   }
 
-  // --- LÓGICA DE CONVITES ---
   Future<void> _verificarConvitesPendentes() async {
     final user = _auth.currentUser;
     if (user == null || user.email == null) return;
-
     final emailBusca = user.email!.toLowerCase().trim();
 
     try {
@@ -112,12 +103,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         if (pendentes.isNotEmpty) {
           final inviteDoc = pendentes.first;
           final inviteData = inviteDoc.data();
-          final String nomeEmpresa =
-              inviteData['nomeEmpresa'] ?? "Uma nova empresa";
-          final String novaEmpresaId = inviteData['empresaId'];
-
           if (mounted) {
-            _exibirAlertaConvite(inviteDoc.id, nomeEmpresa, novaEmpresaId);
+            _exibirAlertaConvite(
+              inviteDoc.id,
+              inviteData['nomeEmpresa'] ?? "Uma nova empresa",
+              inviteData['empresaId'],
+            );
           }
         }
       }
@@ -221,9 +212,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       await SincronizacaoService().sincronizarTudo();
       if (mounted) setState(() {});
     } catch (e) {
-      if (mounted) {
+      if (mounted)
         AppFeedback.show(context, "Erro ao aceitar convite.", isError: true);
-      }
     }
   }
 
@@ -236,7 +226,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       Icons.bar_chart_outlined,
     ];
 
-    // AppBar Comum (Mobile)
     final mobileAppBar = AppBar(
       title: const Text(
         'SolarInsight',
@@ -250,7 +239,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       backgroundColor: const Color(0xFFF5F7FA),
       elevation: 0,
       actions: [
-        // Botão de Sync Removido Daqui! O Mobile usa Pull-to-Refresh.
         Builder(
           builder: (context) => IconButton(
             icon: const CircleAvatar(
@@ -265,41 +253,97 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ],
     );
 
-    return ValueListenableBuilder(
-      valueListenable: Hive.box<Usina>('usinas').listenable(),
-      builder: (context, boxUsinas, _) {
+    // --- CADEADO MESTRA: Busca Permissões do Usuário ---
+    return FutureBuilder<DocumentSnapshot>(
+      future: _auth.currentUser != null
+          ? _firestore.collection('users').doc(_auth.currentUser!.uid).get()
+          : null,
+      builder: (context, userSnapshot) {
+        // Tela de Carregamento enquanto valida o Role
+        if (userSnapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(
+              child: CircularProgressIndicator(color: Colors.deepOrange),
+            ),
+          );
+        }
+
+        final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
+        final bool isAdmin = userData?['role'] == 'admin';
+
+        // Widget de Acesso Negado (caso o usuário tente forçar o índice via código)
+        final acessoRestrito = Scaffold(
+          backgroundColor: const Color(0xFFF5F7FA),
+          body: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(
+                  Icons.lock_person_outlined,
+                  size: 80,
+                  color: Colors.grey,
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  "Área Restrita",
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  "Você não tem permissão para acessar este menu.",
+                  style: TextStyle(color: Colors.grey),
+                ),
+                const SizedBox(height: 32),
+                ElevatedButton(
+                  onPressed: () => setState(() => _paginaAtual = 0),
+                  child: const Text("VOLTAR AO DASHBOARD"),
+                ),
+              ],
+            ),
+          ),
+        );
+
         return ValueListenableBuilder(
-          valueListenable: Hive.box<LancamentoMensal>(
-            'lancamentos',
-          ).listenable(),
-          builder: (context, boxLancamentos, _) {
-            final String refreshKey =
-                "${boxUsinas.length}_${boxLancamentos.length}";
+          valueListenable: Hive.box<Usina>('usinas').listenable(),
+          builder: (context, boxUsinas, _) {
+            return ValueListenableBuilder(
+              valueListenable: Hive.box<LancamentoMensal>(
+                'lancamentos',
+              ).listenable(),
+              builder: (context, boxLancamentos, _) {
+                final String refreshKey =
+                    "${boxUsinas.length}_${boxLancamentos.length}";
 
-            final List<Widget> pages = [
-              VisaoGeralScreen(key: ValueKey("visao_$refreshKey")), // 0
-              UsinasListScreen(key: ValueKey("list_$refreshKey")), // 1
-              AuditoriaScreen(key: ValueKey("audit_$refreshKey")), // 2
-              const MeuPlanoScreen(), // 3
-              const MinhaEquipeScreen(), // 4
-              const HistoricoAtividadesScreen(), // 5
-              const ConfiguracaoDadosScreen(), // 6
-              const ConfiguracoesScreen(), // 7
-            ];
+                // --- MAPA DE PÁGINAS COM TRAVA DE SEGURANÇA ---
+                final List<Widget> pages = [
+                  VisaoGeralScreen(key: ValueKey("visao_$refreshKey")), // 0
+                  UsinasListScreen(key: ValueKey("list_$refreshKey")), // 1
+                  AuditoriaScreen(key: ValueKey("audit_$refreshKey")), // 2
+                  isAdmin ? const MeuPlanoScreen() : acessoRestrito, // 3
+                  isAdmin ? const MinhaEquipeScreen() : acessoRestrito, // 4
+                  isAdmin
+                      ? const HistoricoAtividadesScreen()
+                      : acessoRestrito, // 5
+                  isAdmin
+                      ? const ConfiguracaoDadosScreen()
+                      : acessoRestrito, // 6
+                  isAdmin ? const ConfiguracoesScreen() : acessoRestrito, // 7
+                ];
 
-            return ResponsiveLayout(
-              currentIndex: _paginaAtual,
-              onTabTapped: _navegarParaIndice,
-              pages: pages,
-              titulos: navTitulos,
-              icones: navIcones,
-              mobileAppBar: mobileAppBar,
-              mobileDrawer: const AppDrawer(),
-              mobileFab: null,
-              onSyncTap:
-                  _executarSyncManual, // Funciona exclusivamente no menu da Web
-              onAdminItemTap: (index) {
-                setState(() => _paginaAtual = index);
+                return ResponsiveLayout(
+                  currentIndex: _paginaAtual,
+                  onTabTapped: _navegarParaIndice,
+                  pages: pages,
+                  titulos: navTitulos,
+                  icones: navIcones,
+                  mobileAppBar: mobileAppBar,
+                  mobileDrawer: const AppDrawer(),
+                  mobileFab: null,
+                  onSyncTap: _executarSyncManual,
+                  onAdminItemTap: (index) {
+                    setState(() => _paginaAtual = index);
+                  },
+                );
               },
             );
           },

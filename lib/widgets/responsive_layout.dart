@@ -149,140 +149,165 @@ class ResponsiveLayout extends StatelessWidget {
           // =========================================================
           // =========================================================
 
-          // --- CABEÇALHO DO UTILIZADOR COM DADOS DO FIRESTORE ---
-          FutureBuilder<DocumentSnapshot>(
-            future: isLogado
-                ? FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(user.uid)
-                      .get()
-                : null,
-            builder: (context, snapshot) {
-              final userData = snapshot.data?.data() as Map<String, dynamic>?;
+          // --- AREA PROTEGIDA POR PERFIL (CABEÇALHO + MENUS) ---
+          Expanded(
+            child: FutureBuilder<DocumentSnapshot>(
+              future: isLogado
+                  ? FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .get()
+                  : null,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: Colors.deepOrange),
+                  );
+                }
 
-              final bool isAdmin = userData?['role'] == 'admin';
-              final String nomeEmpresa = userData?['nomeEmpresa'] ?? "";
-              final String nomeUsuarioFirestore =
-                  userData?['nome'] ?? "Carregando...";
+                final userData = snapshot.data?.data() as Map<String, dynamic>?;
 
-              final String cargo = isAdmin ? "Administrador" : "Usuário";
+                // A CHAVE DO CADEADO PARA OS MENUS:
+                final bool isAdmin = userData?['role'] == 'admin';
 
-              final letraInicial =
-                  nomeUsuarioFirestore.isNotEmpty &&
-                      nomeUsuarioFirestore != "Carregando..."
-                  ? nomeUsuarioFirestore[0].toUpperCase()
-                  : "U";
+                final String nomeEmpresa = userData?['nomeEmpresa'] ?? "";
+                final String nomeUsuarioFirestore =
+                    userData?['nome'] ?? "Carregando...";
 
-              return Container(
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF5F7FA),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
+                final String cargo = isAdmin ? "Administrador" : "Usuário";
+
+                final letraInicial =
+                    nomeUsuarioFirestore.isNotEmpty &&
+                        nomeUsuarioFirestore != "Carregando..."
+                    ? nomeUsuarioFirestore[0].toUpperCase()
+                    : "U";
+
+                return Column(
                   children: [
-                    CircleAvatar(
-                      backgroundColor: Colors.white,
-                      radius: 16,
-                      child: Text(
-                        letraInicial,
-                        style: const TextStyle(
-                          color: Colors.deepOrange,
-                          fontWeight: FontWeight.bold,
-                          fontSize:
-                              14, // Ligeiramente maior para melhor leitura
-                        ),
+                    // --- 1. CABEÇALHO DO UTILIZADOR ---
+                    Container(
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F7FA),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
                         children: [
-                          Text(
-                            nomeEmpresa.isNotEmpty
-                                ? "$nomeUsuarioFirestore | $nomeEmpresa"
-                                : nomeUsuarioFirestore,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                              color: Colors.black87,
+                          CircleAvatar(
+                            backgroundColor: Colors.white,
+                            radius: 16,
+                            child: Text(
+                              letraInicial,
+                              style: const TextStyle(
+                                color: Colors.deepOrange,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
                             ),
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
                           ),
-                          Text(
-                            cargo,
-                            style: TextStyle(
-                              color: Colors.grey.shade600,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  nomeEmpresa.isNotEmpty
+                                      ? "$nomeUsuarioFirestore | $nomeEmpresa"
+                                      : nomeUsuarioFirestore,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: Colors.black87,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                ),
+                                Text(
+                                  cargo,
+                                  style: TextStyle(
+                                    color: Colors.grey.shade600,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
                       ),
                     ),
+
+                    const SizedBox(height: 16),
+
+                    // --- 2. MENUS DE NAVEGAÇÃO ---
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        children: [
+                          _buildSectionHeader('PRINCIPAL'),
+                          ...List.generate(titulos.length, (index) {
+                            return _buildMenuItem(
+                              icon: icones[index],
+                              label: titulos[index],
+                              isSelected: currentIndex == index,
+                              onTap: () => onTabTapped(index),
+                            );
+                          }),
+
+                          // ==========================================================
+                          // CADEADO: Só renderiza se for Administrador!
+                          // ==========================================================
+                          if (isAdmin) ...[
+                            const SizedBox(height: 24),
+                            _buildSectionHeader('ADMINISTRAÇÃO'),
+                            _buildMenuItem(
+                              icon: Icons.business,
+                              label: 'Plano e Empresa',
+                              isSelected: currentIndex == 3,
+                              onTap: () => onAdminItemTap?.call(3),
+                            ),
+                            _buildMenuItem(
+                              icon: Icons.group_outlined,
+                              label: 'Equipe',
+                              isSelected: currentIndex == 4,
+                              onTap: () => onAdminItemTap?.call(4),
+                            ),
+                            _buildMenuItem(
+                              icon: Icons.history_edu,
+                              label: 'Logs do Sistema',
+                              isSelected: currentIndex == 5,
+                              onTap: () => onAdminItemTap?.call(5),
+                            ),
+                            _buildMenuItem(
+                              icon: Icons.cloud_download_outlined,
+                              label: 'Backup & Dados',
+                              isSelected: currentIndex == 6,
+                              onTap: () => onAdminItemTap?.call(6),
+                            ),
+                            _buildMenuItem(
+                              icon: Icons.settings_outlined,
+                              label: 'Configurações',
+                              isSelected: currentIndex == 7,
+                              onTap: () => onAdminItemTap?.call(7),
+                            ),
+                          ],
+                          // ==========================================================
+                        ],
+                      ),
+                    ),
                   ],
-                ),
-              );
-            },
-          ),
-
-          const SizedBox(height: 16),
-
-          // Menus de Navegação
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: [
-                _buildSectionHeader('PRINCIPAL'),
-                ...List.generate(titulos.length, (index) {
-                  return _buildMenuItem(
-                    icon: icones[index],
-                    label: titulos[index],
-                    isSelected: currentIndex == index,
-                    onTap: () => onTabTapped(index),
-                  );
-                }),
-                const SizedBox(height: 24),
-                _buildSectionHeader('ADMINISTRAÇÃO'),
-                _buildMenuItem(
-                  icon: Icons.business,
-                  label: 'Plano e Empresa',
-                  isSelected: currentIndex == 3,
-                  onTap: () => onAdminItemTap?.call(3),
-                ),
-                _buildMenuItem(
-                  icon: Icons.group_outlined,
-                  label: 'Equipe',
-                  isSelected: currentIndex == 4,
-                  onTap: () => onAdminItemTap?.call(4),
-                ),
-                _buildMenuItem(
-                  icon: Icons.history_edu,
-                  label: 'Logs do Sistema',
-                  isSelected: currentIndex == 5,
-                  onTap: () => onAdminItemTap?.call(5),
-                ),
-                _buildMenuItem(
-                  icon: Icons.cloud_download_outlined,
-                  label: 'Backup & Dados',
-                  isSelected: currentIndex == 6,
-                  onTap: () => onAdminItemTap?.call(6),
-                ),
-                _buildMenuItem(
-                  icon: Icons.settings_outlined,
-                  label: 'Configurações',
-                  isSelected: currentIndex == 7,
-                  onTap: () => onAdminItemTap?.call(7),
-                ),
-              ],
+                );
+              },
             ),
           ),
+
           const Divider(height: 1),
 
-          // Rodapé (Sincronizar e Sair)
+          // --- Rodapé (Sincronizar e Sair) SEMPRE VISÍVEL ---
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
