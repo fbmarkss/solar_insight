@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "217888141653",
+    "project_id": "solar-insight-pro",
+    "storage_bucket": "solar-insight-pro.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:217888141653:android:b4d602a0a7ccbe8e49ffdc",
+        "android_client_info": {
+          "package_name": "br.com.fabiano.solar_insight"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQibSPzeDth3RahxWmSZsOsKfCVsDgfTE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
