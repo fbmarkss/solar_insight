@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../utils/calculadora_energetica.dart';
+import '../services/sincronizacao_service.dart'; // <-- IMPORT ADICIONADO PARA O PULL-TO-REFRESH
+import '../utils/app_feedback.dart'; // <-- IMPORT DO PADRÃO DE FEEDBACK ADICIONADO
 import 'auditoria_individual_screen.dart';
 import 'tabs/auditoria_global_tab.dart';
 
@@ -122,6 +124,33 @@ class _AuditoriaListaTab extends StatelessWidget {
 
   const _AuditoriaListaTab({required this.onTapUsina, required this.isWeb});
 
+  // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
+  Future<void> _handleRefresh(BuildContext context) async {
+    try {
+      final resultado = await SincronizacaoService().sincronizarTudo();
+
+      if (!context.mounted) return;
+
+      if (resultado.contains('Erro') ||
+          resultado.contains('Sem internet') ||
+          resultado.contains('offline')) {
+        AppFeedback.show(context, resultado, isError: true);
+      } else if (resultado == 'Sincronizado.') {
+        AppFeedback.show(context, "Tudo já está sincronizado.", isError: false);
+      } else {
+        AppFeedback.show(
+          context,
+          "Dados sincronizados com sucesso!",
+          isError: false,
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        AppFeedback.show(context, "Erro ao atualizar: $e", isError: true);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
@@ -143,100 +172,118 @@ class _AuditoriaListaTab extends StatelessWidget {
 
         if (isWeb) {
           // ===============================================================
-          // LAYOUT WEB: BENTO GRID DE CARDS
+          // LAYOUT WEB: BENTO GRID DE CARDS COM PULL-TO-REFRESH
           // ===============================================================
-          return GridView.builder(
-            padding: const EdgeInsets.all(32),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 400, // Tamanho máximo de cada card
-              childAspectRatio: 2.5, // Proporção do card
-              crossAxisSpacing: 24,
-              mainAxisSpacing: 24,
-            ),
-            itemCount: usinas.length,
-            itemBuilder: (context, index) {
-              final usina = usinas[index];
-              final lancamentosUsina = boxLancamentos.values
-                  .where((l) => l.usinaId == usina.id && !l.isDeletado)
-                  .toList();
-              final metricas = CalculadoraEnergetica.calcularMetricasGerais(
-                usina,
-                lancamentosUsina,
-              );
+          return RefreshIndicator(
+            color: Colors.deepOrange,
+            backgroundColor: Colors.white,
+            onRefresh: () => _handleRefresh(context),
+            child: GridView.builder(
+              padding: const EdgeInsets.all(32),
+              physics:
+                  const AlwaysScrollableScrollPhysics(), // Garante que o refresh funcione mesmo com a tela vazia
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 400, // Tamanho máximo de cada card
+                childAspectRatio: 2.5, // Proporção do card
+                crossAxisSpacing: 24,
+                mainAxisSpacing: 24,
+              ),
+              itemCount: usinas.length,
+              itemBuilder: (context, index) {
+                final usina = usinas[index];
+                final lancamentosUsina = boxLancamentos.values
+                    .where((l) => l.usinaId == usina.id && !l.isDeletado)
+                    .toList();
+                final metricas = CalculadoraEnergetica.calcularMetricasGerais(
+                  usina,
+                  lancamentosUsina,
+                );
 
-              return _buildWebCard(context, usina, metricas, moeda, numero);
-            },
+                return _buildWebCard(context, usina, metricas, moeda, numero);
+              },
+            ),
           );
         } else {
           // ===============================================================
-          // LAYOUT MOBILE: MANTIDO EXATAMENTE COMO O ORIGINAL
+          // LAYOUT MOBILE: MANTIDO COM PULL-TO-REFRESH ADICIONADO
           // ===============================================================
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: usinas.length,
-            itemBuilder: (context, index) {
-              final usina = usinas[index];
-              final lancamentosUsina = boxLancamentos.values
-                  .where((l) => l.usinaId == usina.id && !l.isDeletado)
-                  .toList();
-              final metricas = CalculadoraEnergetica.calcularMetricasGerais(
-                usina,
-                lancamentosUsina,
-              );
+          return RefreshIndicator(
+            color: Colors.deepOrange,
+            backgroundColor: Colors.white,
+            onRefresh: () => _handleRefresh(context),
+            child: ListView.builder(
+              padding: const EdgeInsets.all(16),
+              physics:
+                  const AlwaysScrollableScrollPhysics(), // Garante que o refresh funcione mesmo com a tela vazia
+              itemCount: usinas.length,
+              itemBuilder: (context, index) {
+                final usina = usinas[index];
+                final lancamentosUsina = boxLancamentos.values
+                    .where((l) => l.usinaId == usina.id && !l.isDeletado)
+                    .toList();
+                final metricas = CalculadoraEnergetica.calcularMetricasGerais(
+                  usina,
+                  lancamentosUsina,
+                );
 
-              return Card(
-                elevation: 2,
-                margin: const EdgeInsets.only(bottom: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
+                return Card(
+                  elevation: 2,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  leading: CircleAvatar(
-                    backgroundColor: usina.isGeradora
-                        ? Colors.orange.withValues(alpha: 0.1)
-                        : Colors.blue.withValues(alpha: 0.1),
-                    child: Icon(
-                      usina.isGeradora ? Icons.wb_sunny : Icons.home_work,
-                      color: usina.isGeradora ? Colors.orange : Colors.blue,
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
                     ),
-                  ),
-                  title: Text(
-                    usina.nome,
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: Text(
-                    usina.isGeradora
-                        ? 'Gerou: ${numero.format(metricas.totalGeradoKwh)} kWh'
-                        : 'Recebeu: ${numero.format(metricas.totalInjetadoKwh)} kWh',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-                  ),
-                  trailing: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        moeda.format(metricas.valorTotalEconomizadoR),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green,
-                          fontSize: 14,
+                    leading: CircleAvatar(
+                      backgroundColor: usina.isGeradora
+                          ? Colors.orange.withValues(alpha: 0.1)
+                          : Colors.blue.withValues(alpha: 0.1),
+                      child: Icon(
+                        usina.isGeradora ? Icons.wb_sunny : Icons.home_work,
+                        color: usina.isGeradora ? Colors.orange : Colors.blue,
+                      ),
+                    ),
+                    title: Text(
+                      usina.nome,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    subtitle: Text(
+                      usina.isGeradora
+                          ? 'Gerou: ${numero.format(metricas.totalGeradoKwh)} kWh'
+                          : 'Recebeu: ${numero.format(metricas.totalInjetadoKwh)} kWh',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                    trailing: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          moeda.format(metricas.valorTotalEconomizadoR),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green,
+                            fontSize: 14,
+                          ),
                         ),
-                      ),
-                      const Text(
-                        'Economia',
-                        style: TextStyle(fontSize: 10, color: Colors.grey),
-                      ),
-                    ],
+                        const Text(
+                          'Economia',
+                          style: TextStyle(fontSize: 10, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                    onTap: () => onTapUsina(
+                      usina,
+                    ), // CHAMA A LÓGICA DE NAVEGAÇÃO EXTERNA
                   ),
-                  onTap: () =>
-                      onTapUsina(usina), // CHAMA A LÓGICA DE NAVEGAÇÃO EXTERNA
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         }
       },

@@ -1,12 +1,15 @@
 // Caminho: lib/screens/tabs/auditoria_global_tab.dart
 // Descrição: Aba de Análise Global (Balanço Energético + Vilões).
-// Atualização: Layout Bento Grid para Web; Mobile com Scroll Horizontal no Gráfico para evitar Overflow em 12 Meses.
+// Atualização: Layout Bento Grid para Web; Mobile com Scroll Horizontal no Gráfico.
+// ATUALIZAÇÃO RECENTE: Pull-to-Refresh com Feedback Padronizado via AppFeedback.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../models/usina.dart';
 import '../../models/lancamento.dart';
+import '../../services/sincronizacao_service.dart'; // <-- IMPORT PARA O REFRESH
+import '../../utils/app_feedback.dart'; // <-- IMPORT DO PADRÃO DE FEEDBACK
 
 class AuditoriaGlobalTab extends StatefulWidget {
   const AuditoriaGlobalTab({super.key});
@@ -18,6 +21,33 @@ class AuditoriaGlobalTab extends StatefulWidget {
 class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
   String _filtroSelecionado = '6M'; // Opções: '6M', '12M', 'ANO'
 
+  // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
+  Future<void> _handleRefresh(BuildContext context) async {
+    try {
+      final resultado = await SincronizacaoService().sincronizarTudo();
+
+      if (!context.mounted) return;
+
+      if (resultado.contains('Erro') ||
+          resultado.contains('Sem internet') ||
+          resultado.contains('offline')) {
+        AppFeedback.show(context, resultado, isError: true);
+      } else if (resultado == 'Sincronizado.') {
+        AppFeedback.show(context, "Tudo já está sincronizado.", isError: false);
+      } else {
+        AppFeedback.show(
+          context,
+          "Dados sincronizados com sucesso!",
+          isError: false,
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        AppFeedback.show(context, "Erro ao atualizar: $e", isError: true);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder(
@@ -28,15 +58,33 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
             .toList();
 
         if (todosLancamentos.isEmpty) {
-          return const Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.analytics_outlined, size: 48, color: Colors.grey),
-                SizedBox(height: 16),
-                Text(
-                  "Sem dados para análise global.",
-                  style: TextStyle(color: Colors.grey),
+          // O RefreshIndicator na tela vazia permite puxar para tentar baixar dados iniciais
+          return RefreshIndicator(
+            color: Colors.deepOrange,
+            backgroundColor: Colors.white,
+            onRefresh: () => _handleRefresh(context),
+            child: CustomScrollView(
+              // Necessário para o RefreshIndicator funcionar em telas sem listas
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverFillRemaining(
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: const [
+                        Icon(
+                          Icons.analytics_outlined,
+                          size: 48,
+                          color: Colors.grey,
+                        ),
+                        SizedBox(height: 16),
+                        Text(
+                          "Sem dados para análise global.",
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -52,184 +100,202 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
 
             if (isWeb) {
               // ===============================================================
-              // LAYOUT WEB: COLUNAS LADO A LADO (BENTO GRID)
+              // LAYOUT WEB: COLUNAS LADO A LADO (BENTO GRID) COM REFRESH
               // ===============================================================
-              return SingleChildScrollView(
-                padding: const EdgeInsets.all(32),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // ESQUERDA: Gráfico (Ganha mais espaço)
-                    Expanded(
-                      flex: 2,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Row(
-                                children: [
-                                  const Text(
-                                    "Balanço Energético",
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 20,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Tooltip(
-                                    message:
-                                        'Comparativo entre produção e consumo em todas as unidades.',
-                                    child: Icon(
-                                      Icons.info_outline,
-                                      size: 20,
-                                      color: Colors.grey.shade400,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Row(
-                                children: [
-                                  _buildFilterChip('6 Meses', '6M'),
-                                  const SizedBox(width: 8),
-                                  _buildFilterChip('12 Meses', '12M'),
-                                  const SizedBox(width: 8),
-                                  _buildFilterChip('Este Ano', 'ANO'),
-                                ],
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 24),
-                          // Gráfico estendido para Web (altura de 350px)
-                          _buildGraficoContainer(dadosGrafico, 350, isWeb),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 32),
-                    // DIREITA: Top Vilões
-                    Expanded(
-                      flex: 1,
-                      child: Container(
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
+              return RefreshIndicator(
+                color: Colors.deepOrange,
+                backgroundColor: Colors.white,
+                onRefresh: () => _handleRefresh(context),
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(32),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // ESQUERDA: Gráfico (Ganha mais espaço)
+                      Expanded(
+                        flex: 2,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              "Top 3 - Maiores Faturas",
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            const Text(
-                              "Referência do último mês registrado.",
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            if (topViloes.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 20),
-                                child: Text(
-                                  "Nenhuma fatura relevante encontrada.",
-                                  style: TextStyle(color: Colors.grey),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Text(
+                                      "Balanço Energético",
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Tooltip(
+                                      message:
+                                          'Comparativo entre produção e consumo em todas as unidades.',
+                                      child: Icon(
+                                        Icons.info_outline,
+                                        size: 20,
+                                        color: Colors.grey.shade400,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              )
-                            else
-                              ...topViloes.map((item) => _buildVilaoCard(item)),
+                                Row(
+                                  children: [
+                                    _buildFilterChip('6 Meses', '6M'),
+                                    const SizedBox(width: 8),
+                                    _buildFilterChip('12 Meses', '12M'),
+                                    const SizedBox(width: 8),
+                                    _buildFilterChip('Este Ano', 'ANO'),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 24),
+                            // Gráfico estendido para Web (altura de 350px)
+                            _buildGraficoContainer(dadosGrafico, 350, isWeb),
                           ],
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            } else {
-              // ===============================================================
-              // LAYOUT MOBILE (MANTIDO EXATAMENTE IGUAL)
-              // ===============================================================
-              return ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Balanço Energético",
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
-                      ),
-                      Tooltip(
-                        message:
-                            'Comparativo entre o que foi produzido e o que foi realmente consumido em todas as unidades.',
-                        triggerMode: TooltipTriggerMode.tap,
-                        child: Icon(
-                          Icons.info_outline,
-                          size: 20,
-                          color: Colors.grey.shade400,
+                      const SizedBox(width: 32),
+                      // DIREITA: Top Vilões
+                      Expanded(
+                        flex: 1,
+                        child: Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                "Top 3 - Maiores Faturas",
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                "Referência do último mês registrado.",
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              if (topViloes.isEmpty)
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 20),
+                                  child: Text(
+                                    "Nenhuma fatura relevante encontrada.",
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                )
+                              else
+                                ...topViloes.map(
+                                  (item) => _buildVilaoCard(item),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
+                ),
+              );
+            } else {
+              // ===============================================================
+              // LAYOUT MOBILE (COM REFRESH INJETADO)
+              // ===============================================================
+              return RefreshIndicator(
+                color: Colors.deepOrange,
+                backgroundColor: Colors.white,
+                onRefresh: () => _handleRefresh(context),
+                child: ListView(
+                  physics:
+                      const AlwaysScrollableScrollPhysics(), // Necessário para o pull funcionar
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        _buildFilterChip('6 Meses', '6M'),
-                        const SizedBox(width: 8),
-                        _buildFilterChip('12 Meses', '12M'),
-                        const SizedBox(width: 8),
-                        _buildFilterChip(
-                          'Este Ano (${DateTime.now().year})',
-                          'ANO',
+                        const Text(
+                          "Balanço Energético",
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                          ),
+                        ),
+                        Tooltip(
+                          message:
+                              'Comparativo entre o que foi produzido e o que foi realmente consumido em todas as unidades.',
+                          triggerMode: TooltipTriggerMode.tap,
+                          child: Icon(
+                            Icons.info_outline,
+                            size: 20,
+                            color: Colors.grey.shade400,
+                          ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 20),
+                    const SizedBox(height: 16),
 
-                  // Gráfico original do Mobile (altura de 260px)
-                  _buildGraficoContainer(dadosGrafico, 260, isWeb),
-
-                  const SizedBox(height: 30),
-
-                  const Text(
-                    "Top 3 - Maiores Faturas (Último Mês)",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    "Onde seu dinheiro está indo embora.",
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 12),
-
-                  if (topViloes.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 20),
-                      child: Text(
-                        "Nenhuma fatura relevante encontrada no último mês.",
-                        style: TextStyle(color: Colors.grey),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _buildFilterChip('6 Meses', '6M'),
+                          const SizedBox(width: 8),
+                          _buildFilterChip('12 Meses', '12M'),
+                          const SizedBox(width: 8),
+                          _buildFilterChip(
+                            'Este Ano (${DateTime.now().year})',
+                            'ANO',
+                          ),
+                        ],
                       ),
-                    )
-                  else
-                    ...topViloes.map((item) => _buildVilaoCard(item)),
+                    ),
+                    const SizedBox(height: 20),
 
-                  const SizedBox(height: 50),
-                ],
+                    // Gráfico original do Mobile (altura de 260px)
+                    _buildGraficoContainer(dadosGrafico, 260, isWeb),
+
+                    const SizedBox(height: 30),
+
+                    const Text(
+                      "Top 3 - Maiores Faturas (Último Mês)",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      "Onde seu dinheiro está indo embora.",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+
+                    if (topViloes.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 20),
+                        child: Text(
+                          "Nenhuma fatura relevante encontrada no último mês.",
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      )
+                    else
+                      ...topViloes.map((item) => _buildVilaoCard(item)),
+
+                    const SizedBox(height: 50),
+                  ],
+                ),
               );
             }
           },

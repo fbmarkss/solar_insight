@@ -1,6 +1,6 @@
 // Caminho: lib/screens/main_navigation_screen.dart
 // Descrição: Controlador mestre (Single Page Application na Web, Navegação Híbrida).
-// ATUALIZAÇÃO: Removido o FAB global de todas as abas. Cada tela gere o seu próprio botão.
+// ATUALIZAÇÃO: Motor Reativo de Fila Injetado. Botão de Sincronizar Global Mobile Removido.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -45,41 +45,46 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _inicializarProcessos() async {
-    _sincronizacaoAutomatica();
+    // 1. Inicia a Inteligência do Background (Ouve a fila e a internet)
+    SincronizacaoService.inicializarMotorReativo();
+
     await Future.delayed(const Duration(seconds: 1));
     if (mounted) _verificarConvitesPendentes();
   }
 
-  void _sincronizacaoAutomatica() async {
-    try {
-      await SincronizacaoService().sincronizarTudo();
-    } catch (e) {
-      debugPrint("Auto Sync falhou: $e");
-    }
-  }
-
+  // Lógica agora usada EXCLUSIVAMENTE pelo botão do Menu Lateral na Web
   Future<void> _executarSyncManual() async {
-    AppFeedback.show(context, "Sincronizando dados...");
+    // Não mostra o pop-up travando a tela, apenas avisa se houver erro ou dá o feedback final.
     try {
-      final resultado = await context
-          .read<DashboardProvider>()
-          .sincronizarDados();
-      if (mounted) {
-        if (resultado.contains('Erro')) {
-          AppFeedback.show(context, resultado, isError: true);
-        } else {
-          AppFeedback.show(context, "Sincronização concluída!");
-        }
+      final resultado = await SincronizacaoService().sincronizarTudo();
+      if (!mounted) return;
+
+      // Força a atualização dos gráficos após a sincronização
+      Provider.of<DashboardProvider>(context, listen: false).atualizar();
+
+      if (resultado.contains('Erro') || resultado.contains('Sem internet')) {
+        AppFeedback.show(context, resultado, isError: true);
+      } else if (resultado == 'Sincronizado.') {
+        AppFeedback.show(context, "Tudo já está sincronizado.", isError: false);
+      } else {
+        AppFeedback.show(
+          context,
+          "Dados sincronizados com sucesso!",
+          isError: false,
+        );
       }
     } catch (e) {
       if (mounted) {
-        AppFeedback.show(context, "Erro ao sincronizar.", isError: true);
+        AppFeedback.show(
+          context,
+          "Erro ao conectar com a nuvem.",
+          isError: true,
+        );
       }
     }
   }
 
   // --- NOVA LÓGICA DE NAVEGAÇÃO INTERNA (WEB) ---
-  // Ao invés de abrir nova tela, apenas trocamos o índice da lista de páginas
   void _navegarParaIndice(int index) {
     setState(() {
       _paginaAtual = index;
@@ -245,11 +250,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       backgroundColor: const Color(0xFFF5F7FA),
       elevation: 0,
       actions: [
-        IconButton(
-          icon: const Icon(Icons.sync, color: Colors.deepOrange),
-          onPressed: _executarSyncManual,
-        ),
-        const SizedBox(width: 8),
+        // Botão de Sync Removido Daqui! O Mobile usa Pull-to-Refresh.
         Builder(
           builder: (context) => IconButton(
             icon: const CircleAvatar(
@@ -264,10 +265,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ],
     );
 
-    // MÁGICA: Não passamos NENHUM FAB Global para o ResponsiveLayout.
-    // Cada tela (Visão Geral, Usinas, etc) vai desenhar e gerir o seu próprio botão,
-    // garantindo que ele respeita a arquitetura correta (Web vs Mobile e Gaiola Aninhada).
-
     return ValueListenableBuilder(
       valueListenable: Hive.box<Usina>('usinas').listenable(),
       builder: (context, boxUsinas, _) {
@@ -279,17 +276,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             final String refreshKey =
                 "${boxUsinas.length}_${boxLancamentos.length}";
 
-            // --- LISTA UNIFICADA DE TELAS ---
-            // Agora todas as telas vivem aqui, permitindo a troca sem Navigation.push na Web
             final List<Widget> pages = [
-              // 0: Visão Geral
-              VisaoGeralScreen(key: ValueKey("visao_$refreshKey")),
-              // 1: Lista de Usinas
-              UsinasListScreen(key: ValueKey("list_$refreshKey")),
-              // 2: Auditoria
-              AuditoriaScreen(key: ValueKey("audit_$refreshKey")),
-
-              // --- TELAS ADMIN (Indices 3 a 7) ---
+              VisaoGeralScreen(key: ValueKey("visao_$refreshKey")), // 0
+              UsinasListScreen(key: ValueKey("list_$refreshKey")), // 1
+              AuditoriaScreen(key: ValueKey("audit_$refreshKey")), // 2
               const MeuPlanoScreen(), // 3
               const MinhaEquipeScreen(), // 4
               const HistoricoAtividadesScreen(), // 5
@@ -299,20 +289,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
             return ResponsiveLayout(
               currentIndex: _paginaAtual,
-              onTabTapped: _navegarParaIndice, // Para abas principais (0-2)
+              onTabTapped: _navegarParaIndice,
               pages: pages,
               titulos: navTitulos,
               icones: navIcones,
-
-              // Parâmetros Mobile
               mobileAppBar: mobileAppBar,
               mobileDrawer: const AppDrawer(),
-              mobileFab: null, // Deixamos as telas tratarem disso internamente
-              // Callbacks Web
-              onSyncTap: _executarSyncManual,
+              mobileFab: null,
+              onSyncTap:
+                  _executarSyncManual, // Funciona exclusivamente no menu da Web
               onAdminItemTap: (index) {
-                // Ao clicar no menu admin da web, apenas trocamos o índice!
-                // O ResponsiveLayout já renderiza a página correspondente no centro.
                 setState(() => _paginaAtual = index);
               },
             );

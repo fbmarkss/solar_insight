@@ -576,8 +576,9 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                     firstDate: DateTime(2000),
                     lastDate: DateTime.now(),
                   );
-                  if (picked != null)
+                  if (picked != null) {
                     setModalState(() => dataSelecionada = picked);
+                  }
                 },
               ),
               _buildStylishField(

@@ -1,16 +1,21 @@
 // Caminho: lib/screens/configuracoes_screen.dart
-// Descrição: Tela de Ajustes Gerais (Logout, Sync e Perfil). Essencial para a versão Web.
+// Descrição: Tela de Ajustes Gerais (Logout, Sync, Perfil e Pausa de Sync). Essencial para a versão Web e Mobile.
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:provider/provider.dart';
-import '../services/dashboard_provider.dart';
+import '../services/sincronizacao_service.dart'; // Import atualizado
 import '../services/auth_service.dart';
+import '../utils/app_feedback.dart'; // Padrão de feedback
 import 'auth/login_screen.dart';
 
-class ConfiguracoesScreen extends StatelessWidget {
+class ConfiguracoesScreen extends StatefulWidget {
   const ConfiguracoesScreen({super.key});
 
+  @override
+  State<ConfiguracoesScreen> createState() => _ConfiguracoesScreenState();
+}
+
+class _ConfiguracoesScreenState extends State<ConfiguracoesScreen> {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -94,38 +99,130 @@ class ConfiguracoesScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // BOTÃO DE SYNC
+          // BLOCO DE CONTROLE DE SYNC E PAUSA
           Container(
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey.shade200),
             ),
-            child: ListTile(
-              leading: const Icon(Icons.sync, color: Colors.blue),
-              title: const Text("Sincronizar Agora"),
-              subtitle: const Text("Forçar atualização com a nuvem"),
-              onTap: () async {
-                final scaffold = ScaffoldMessenger.of(context);
-                final provider = Provider.of<DashboardProvider>(
-                  context,
-                  listen: false,
-                );
-
-                scaffold.showSnackBar(
-                  const SnackBar(content: Text('Sincronizando...')),
-                );
-
-                final msg = await provider.sincronizarDados();
-
-                scaffold.showSnackBar(
-                  SnackBar(
-                    content: Text(msg),
-                    backgroundColor: msg.contains('Erro')
-                        ? Colors.red
+            child: Column(
+              children: [
+                // INTERRUPTOR DE PAUSA
+                SwitchListTile(
+                  activeColor: Colors.deepOrange,
+                  secondary: Icon(
+                    SincronizacaoService.isPaused
+                        ? Icons.cloud_off
+                        : Icons.cloud_sync,
+                    color: SincronizacaoService.isPaused
+                        ? Colors.orange
                         : Colors.green,
                   ),
-                );
-              },
+                  title: const Text("Pausar Sincronização"),
+                  subtitle: Text(
+                    SincronizacaoService.isPaused
+                        ? "Modo Avião forçado: Salvando apenas no dispositivo"
+                        : "Mantém seus dados enviados para a nuvem automaticamente",
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  ),
+                  value: SincronizacaoService.isPaused,
+                  onChanged: (bool value) {
+                    setState(() {
+                      SincronizacaoService.isPaused = value;
+                    });
+                    if (value) {
+                      AppFeedback.show(
+                        context,
+                        "Sincronização pausada. Pode trabalhar offline.",
+                        isError: true,
+                      );
+                    } else {
+                      AppFeedback.show(
+                        context,
+                        "Sincronização reativada.",
+                        isError: false,
+                      );
+                      // Desperta o motor invisível para enviar qualquer pendência na fila
+                      SincronizacaoService.inicializarMotorReativo();
+                    }
+                  },
+                ),
+                const Divider(height: 1),
+
+                // BOTÃO DE FORÇAR SYNC (Fica cinza e inativo se pausado)
+                ListTile(
+                  leading: Icon(
+                    Icons.sync,
+                    color: SincronizacaoService.isPaused
+                        ? Colors.grey
+                        : Colors.blue,
+                  ),
+                  title: Text(
+                    "Sincronizar Agora",
+                    style: TextStyle(
+                      color: SincronizacaoService.isPaused
+                          ? Colors.grey
+                          : Colors.black87,
+                    ),
+                  ),
+                  subtitle: Text(
+                    "Forçar atualização com a nuvem",
+                    style: TextStyle(color: Colors.grey.shade600),
+                  ),
+                  onTap: SincronizacaoService.isPaused
+                      ? () {
+                          // Se estiver pausado, avisa porquê de não estar a fazer nada
+                          AppFeedback.show(
+                            context,
+                            "Sincronização está pausada. Desligue a chave acima.",
+                            isError: true,
+                          );
+                        }
+                      : () async {
+                          AppFeedback.show(
+                            context,
+                            'Verificando dados...',
+                            isError: false,
+                          );
+
+                          try {
+                            final resultado = await SincronizacaoService()
+                                .sincronizarTudo();
+                            if (!context.mounted) return;
+
+                            if (resultado.contains('Erro') ||
+                                resultado.contains('Sem internet')) {
+                              AppFeedback.show(
+                                context,
+                                resultado,
+                                isError: true,
+                              );
+                            } else if (resultado == 'Sincronizado.') {
+                              AppFeedback.show(
+                                context,
+                                "Tudo já está sincronizado.",
+                                isError: false,
+                              );
+                            } else {
+                              AppFeedback.show(
+                                context,
+                                "Dados sincronizados com sucesso!",
+                                isError: false,
+                              );
+                            }
+                          } catch (e) {
+                            if (context.mounted) {
+                              AppFeedback.show(
+                                context,
+                                "Erro ao atualizar: $e",
+                                isError: true,
+                              );
+                            }
+                          }
+                        },
+                ),
+              ],
             ),
           ),
 

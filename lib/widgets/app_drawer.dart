@@ -10,6 +10,7 @@ import '../screens/admin/minha_equipe_screen.dart';
 import '../screens/admin/historico_atividades_screen.dart';
 import '../screens/configuracao_dados_screen.dart';
 import '../screens/admin/meu_plano_screen.dart';
+import '../screens/configuracoes_screen.dart'; // <-- IMPORT DA TELA ADICIONADO
 
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key});
@@ -197,7 +198,16 @@ class AppDrawer extends StatelessWidget {
               ListTile(
                 leading: const Icon(Icons.settings_outlined),
                 title: const Text('Configurações do App'),
-                onTap: () {},
+                onTap: () {
+                  // Lógica adicionada: Fecha o menu e abre as Configurações
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ConfiguracoesScreen(),
+                    ),
+                  );
+                },
               ),
 
               const Divider(),

@@ -1,5 +1,6 @@
 // Caminho: lib/screens/usinas_list_screen.dart
 // Descrição: Lista de Usinas com Navegador Aninhado e FAB Oculto na Web.
+// ATUALIZAÇÃO: Pull-to-Refresh com Feedback Padronizado via AppFeedback.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -7,6 +8,7 @@ import '../models/usina.dart';
 import 'cadastro_usina_screen.dart';
 import 'usina_detalhes_screen.dart';
 import '../services/sincronizacao_service.dart';
+import '../utils/app_feedback.dart'; // <-- IMPORT DO PADRÃO DE FEEDBACK ADICIONADO
 
 class UsinasListScreen extends StatefulWidget {
   const UsinasListScreen({super.key});
@@ -19,37 +21,29 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
   // A "mágica" para a Web: Um navegador independente que não esconde o Menu Lateral
   final GlobalKey<NavigatorState> _nestedNavKey = GlobalKey<NavigatorState>();
 
+  // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
   Future<void> _handleRefresh(BuildContext context) async {
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
 
-      if (context.mounted) {
-        Color snackColor = Colors.green;
-        if (resultado.contains('Sem internet') ||
-            resultado.contains('offline')) {
-          snackColor = Colors.orange;
-        }
+      if (!context.mounted) return;
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              resultado,
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            backgroundColor: snackColor,
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
+      if (resultado.contains('Erro') ||
+          resultado.contains('Sem internet') ||
+          resultado.contains('offline')) {
+        AppFeedback.show(context, resultado, isError: true);
+      } else if (resultado == 'Sincronizado.') {
+        AppFeedback.show(context, "Tudo já está sincronizado.", isError: false);
+      } else {
+        AppFeedback.show(
+          context,
+          "Dados sincronizados com sucesso!",
+          isError: false,
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Erro ao atualizar: $e"),
-            backgroundColor: Colors.red,
-          ),
-        );
+        AppFeedback.show(context, "Erro ao atualizar: $e", isError: true);
       }
     }
   }

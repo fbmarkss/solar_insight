@@ -516,7 +516,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Volume de energia da rede que você consumiu, mas não pôde usar os seus créditos para abater devido à cobrança obrigatória do Custo de Disponibilidade (ex: 100 kWh/mês). Isso explica porque o seu saldo acumulado é maior do que a simples subtração.',
+                        'Volume de energia da rede que você consumiu, mas não pôde usar os seus créditos para abater devido à cobrança obrigatória do Custo de Disponibilidade (ex: 100 kWh/mês).',
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.red.shade700,

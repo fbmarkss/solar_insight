@@ -1,6 +1,7 @@
 // Caminho: lib/services/sincronizacao_service.dart
-// Status: 100% COMPLETO | Smart Garbage Collector + Proteção Zombie Data + Rastreabilidade.
+// Status: 100% COMPLETO | Motor Reativo Background + Smart Garbage Collector.
 
+import 'dart:async'; // Necessário para o StreamSubscription do Motor
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hive/hive.dart';
@@ -16,12 +17,68 @@ class SincronizacaoService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final LoggerService _logger = LoggerService();
 
-  // Prazo de segurança para considerar um dado "velho demais" para subir
-  // Se você tem um dado local modificado há mais de 30 dias e ele não existe na nuvem,
-  // assumimos que foi deletado por outro admin e deve morrer.
   final Duration _prazoQuarentena = const Duration(days: 30);
 
+  // ===========================================================================
+  // ⚙️ MOTOR INVISÍVEL (REATIVIDADE E AUTO-START)
+  // ===========================================================================
+  static bool _isSyncing = false;
+  static bool isPaused = false; // <-- CHAVE GERAL DE PAUSA ADICIONADA
+  static StreamSubscription? _conexaoSub;
+
+  /// Inicia o "Despertador" e os ouvintes de Fila e Conexão.
+  /// Chamado uma vez ao abrir o App.
+  static void inicializarMotorReativo() {
+    // 1. Ouve a Fila: Se alguém salvar algo localmente, tenta sincronizar na hora.
+    SyncQueueService.onQueueUpdated = () {
+      _dispararSyncSilencioso();
+    };
+
+    // 2. Ouve a Internet: Se o celular/PC reconectar, verifica se tem fila parada.
+    _conexaoSub ??= Connectivity().onConnectivityChanged.listen((
+      resultados,
+    ) async {
+      if (!resultados.contains(ConnectivityResult.none)) {
+        bool temPendencia = await SyncQueueService.hasPendingItems();
+        if (temPendencia) {
+          debugPrint(
+            '🌐 [MOTOR] Internet voltou e há fila! Disparando sync...',
+          );
+          _dispararSyncSilencioso();
+        }
+      }
+    });
+
+    // 3. Auto-Start: Faz uma verificação de segurança assim que o app liga.
+    _dispararSyncSilencioso();
+  }
+
+  /// Executa a sincronização em segundo plano com trava para não atropelar processos.
+  static Future<void> _dispararSyncSilencioso() async {
+    if (_isSyncing || isPaused)
+      return; // <-- BLOQUEIO ADICIONADO SE ESTIVER PAUSADO
+
+    _isSyncing = true;
+    try {
+      await SincronizacaoService().sincronizarTudo();
+    } catch (e) {
+      debugPrint('🔇 [MOTOR ERRO] Falha silenciosa: $e');
+    } finally {
+      _isSyncing = false; // Libera a trava quando terminar
+    }
+  }
+
+  // ===========================================================================
+  // LÓGICA DE SINCRONIZAÇÃO PRINCIPAL
+  // ===========================================================================
+
   Future<String> sincronizarTudo() async {
+    // <-- BLOQUEIO MANUAL ADICIONADO AQUI TAMBÉM
+    if (isPaused) {
+      debugPrint('--- ⏸️ [SYNC] Sincronização Pausada pelo Usuário. ---');
+      return 'Erro: Sincronização pausada pelo usuário.';
+    }
+
     final user = _auth.currentUser;
     if (user == null) return 'Usuário offline.';
 
@@ -34,33 +91,26 @@ class SincronizacaoService {
     try {
       debugPrint('--- 🔄 [SYNC] INICIANDO PROCESSO ---');
 
-      // 1. Rastreabilidade: Atualiza data de sync deste usuário
-      // Isso é CRUCIAL para a faxina saber que este usuário está atualizado.
       await _firestore.collection('users').doc(user.uid).set({
         'lastSync': FieldValue.serverTimestamp(),
-        'email': user.email, // Útil para o admin saber quem é
+        'email': user.email,
       }, SetOptions(merge: true));
 
       final userDoc = await _firestore.collection('users').doc(user.uid).get();
-      // Se não tiver empresaId, assume o próprio UID (Single User)
       String empresaId = userDoc.data()?['empresaId'] ?? user.uid;
-      // Verifica se é Admin (para poder rodar a faxina depois)
       bool isAdmin =
           userDoc.data()?['isAdmin'] == true || empresaId == user.uid;
 
-      // 2. Ciclo de Sincronização (Com Proteção Zombie)
       int usinasUp = await _enviarUsinasLocais(empresaId, user.uid);
       int usinasDown = await _baixarUsinasRemotas(empresaId);
       int lancamentosUp = await _enviarLancamentosLocais(empresaId, user.uid);
       int lancamentosDown = await _baixarLancamentosRemotos(empresaId);
 
-      // 3. Faxina Inteligente (Só roda se for Admin)
       int itensLimpos = 0;
       if (isAdmin) {
         itensLimpos = await _executarFaxinaInteligente(empresaId);
       }
 
-      // 4. Relatório Final
       String resumo = 'Sincronizado.';
       int totalMovimento =
           usinasUp + usinasDown + lancamentosUp + lancamentosDown + itensLimpos;
@@ -96,18 +146,13 @@ class SincronizacaoService {
     final box = Hive.box<Usina>('usinas');
     final queueItems = await SyncQueueService.getPendingItems();
 
-    // Filtra apenas o que está na fila para subir
     final queuedUsinas = queueItems
         .where((i) => i['collection'] == 'usinas')
         .map((i) => i['docId'] as String)
         .toSet();
 
     for (var usina in box.values) {
-      // Só processa se estiver na fila OU se nunca subiu (idRemoto null)
       if (usina.idRemoto == null || queuedUsinas.contains(usina.id)) {
-        // --- 🛡️ PROTEÇÃO ZOMBIE DATA ---
-        // Se a usina tem idRemoto (já subiu um dia), mas não está no Firestore,
-        // e a última modificação local é antiga (> 30 dias), é LIXO que ressuscitou.
         if (usina.idRemoto != null) {
           final docSnapshot = await _firestore
               .collection('usinas')
@@ -121,13 +166,12 @@ class SincronizacaoService {
               debugPrint(
                 '🧟 [ZOMBIE KILL] Usina ${usina.nome} deletada localmente (Lixo antigo).',
               );
-              await usina.delete(); // Hard Delete Local
-              await SyncQueueService.remove('usinas', usina.id); // Tira da fila
-              continue; // Pula para o próximo, não sobe esse lixo
+              await usina.delete();
+              await SyncQueueService.remove('usinas', usina.id);
+              continue;
             }
           }
         }
-        // --------------------------------
 
         final docRef = usina.idRemoto == null
             ? _firestore.collection('usinas').doc()
@@ -138,7 +182,6 @@ class SincronizacaoService {
 
         await docRef.set(map, SetOptions(merge: true));
 
-        // Atualiza metadados locais após sucesso
         if (usina.idRemoto == null) {
           usina.idRemoto = docRef.id;
           usina.tenantId = empresaId;
@@ -148,7 +191,6 @@ class SincronizacaoService {
         if (!usina.isDeletado) usina.ultimaSincronizacao = DateTime.now();
         await usina.save();
 
-        // Remove da fila de pendências
         if (queuedUsinas.contains(usina.id)) {
           await SyncQueueService.remove('usinas', usina.id);
         }
@@ -162,7 +204,6 @@ class SincronizacaoService {
     int contador = 0;
     final box = Hive.box<Usina>('usinas');
 
-    // Baixa tudo da empresa (incluindo deletados marcados com isDeletado=true)
     final snapshot = await _firestore
         .collection('usinas')
         .where('tenantId', isEqualTo: empresaId)
@@ -180,17 +221,12 @@ class SincronizacaoService {
             Usina(id: '', nome: '', concessionaria: '', tipo: '', ativa: false),
       );
 
-      // CASO 1: Novo (Não tenho local)
       if (usinaLocal.id.isEmpty) {
-        // Só baixo se NÃO estiver deletado na nuvem.
-        // Se estiver isDeletado=true na nuvem e eu não tenho, não preciso baixar lixo.
         if (dados['isDeletado'] != true) {
           await box.add(_mapToUsina(dados, doc.id));
           contador++;
         }
-      }
-      // CASO 2: Atualização (Tenho local, mas nuvem é mais recente)
-      else if (usinaLocal.ultimaSincronizacao == null ||
+      } else if (usinaLocal.ultimaSincronizacao == null ||
           dataNuvem.isAfter(usinaLocal.ultimaSincronizacao!)) {
         _atualizarUsinaComMap(usinaLocal, dados);
         if (!usinaLocal.isDeletado) {
@@ -201,9 +237,6 @@ class SincronizacaoService {
       }
     }
 
-    // CASO 3: Hard Delete Remoto (Nuvem não tem mais, eu tenho)
-    // Se a nuvem deletou fisicamente (Faxina), eu deleto fisicamente também.
-    // Regra: Eu tenho idRemoto, mas esse ID não veio no snapshot da nuvem.
     final usinasParaApagar = box.values
         .where((u) => u.idRemoto != null && !idsNaNuvem.contains(u.idRemoto))
         .toList();
@@ -234,7 +267,6 @@ class SincronizacaoService {
 
     for (var l in box.values) {
       if (l.idRemoto == null || queuedLancamentos.contains(l.id)) {
-        // --- 🛡️ PROTEÇÃO ZOMBIE DATA ---
         if (l.idRemoto != null) {
           final docSnapshot = await _firestore
               .collection('lancamentos')
@@ -250,7 +282,6 @@ class SincronizacaoService {
             }
           }
         }
-        // --------------------------------
 
         final docRef = l.idRemoto == null
             ? _firestore.collection('lancamentos').doc()
@@ -322,7 +353,6 @@ class SincronizacaoService {
       }
     }
 
-    // Hard Delete Local (Espelho da Nuvem)
     final lancsParaApagar = box.values
         .where((l) => l.idRemoto != null && !idsNaNuvem.contains(l.idRemoto))
         .toList();
@@ -343,22 +373,17 @@ class SincronizacaoService {
     debugPrint('🧹 [FAXINA] Iniciando análise inteligente...');
     int totalRemovido = 0;
 
-    // 1. Quem são os habitantes dessa empresa?
     final usersSnapshot = await _firestore
         .collection('users')
         .where('empresaId', isEqualTo: empresaId)
         .get();
 
-    // 2. Descobre a data de sync mais antiga da turma (O "Elo Mais Fraco")
     DateTime dataSyncMaisAntiga = DateTime.now();
 
-    // Se só tem 1 usuário (eu), a data é "agora", ou seja, pode limpar tudo.
     if (usersSnapshot.docs.length <= 1) {
       debugPrint('🧹 [FAXINA] Único usuário. Modo limpeza total ativado.');
-      // Truque: Define data antiga no futuro para liberar qualquer exclusão pendente
       dataSyncMaisAntiga = DateTime.now().add(const Duration(days: 1));
     } else {
-      // Se tem equipe, procura quem está mais atrasado
       for (var doc in usersSnapshot.docs) {
         final dados = doc.data();
         if (dados['lastSync'] != null) {
@@ -367,64 +392,44 @@ class SincronizacaoService {
             dataSyncMaisAntiga = lastSync;
           }
         } else {
-          // Se tem um usuário que NUNCA sincronizou (null), ele trava a fila?
-          // Decisão: Assumimos uma data muito antiga (ano 2000) para travar a limpeza segura,
-          // A MENOS que esse usuário esteja inativo há muito tempo.
-          // Aqui, para simplificar: consideramos que ele nunca viu a exclusão.
           dataSyncMaisAntiga = DateTime(2000, 1, 1);
         }
       }
     }
 
-    // 3. Define o Prazo Limite Absoluto (30 dias)
-    // Se o item foi deletado antes disso, morre mesmo que o usuário atrasado não tenha visto.
     DateTime dataLimiteAbsoluta = DateTime.now().subtract(_prazoQuarentena);
 
     debugPrint(
       '🧹 [FAXINA] Elo mais fraco sincronizou em: $dataSyncMaisAntiga',
     );
 
-    // 4. Varredura e Execução (Usinas)
     final boxUsinas = Hive.box<Usina>('usinas');
-    // Filtra apenas as que estão marcadas como deletadas E já estão na nuvem
     final usinasLixo = boxUsinas.values
         .where((u) => u.isDeletado && u.idRemoto != null)
         .toList();
 
     for (var u in usinasLixo) {
       DateTime dataDelecao = u.ultimaSincronizacao ?? DateTime.now();
-
-      // CONDIÇÃO DE MORTE:
-      // A) Todos já sincronizaram DEPOIS que eu deletei isso? (dataSyncMaisAntiga > dataDelecao)
-      // B) OU faz mais de 30 dias que deletei? (dataDelecao < dataLimiteAbsoluta)
-
       bool podeMatar =
           dataSyncMaisAntiga.isAfter(dataDelecao) ||
           dataDelecao.isBefore(dataLimiteAbsoluta);
 
       if (podeMatar) {
-        // Hard Delete Nuvem
         await _firestore.collection('usinas').doc(u.idRemoto).delete();
-        // Hard Delete Local
         await u.delete();
-        // Remove da fila (se houver resquício)
         await SyncQueueService.remove('usinas', u.id);
         totalRemovido++;
         debugPrint('🧹 [FAXINA] Usina ${u.nome} removida permanentemente.');
       }
     }
 
-    // 5. Varredura e Execução (Lançamentos)
     final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
     final lancsLixo = boxLanc.values
         .where((l) => l.isDeletado && l.idRemoto != null)
         .toList();
 
     for (var l in lancsLixo) {
-      DateTime dataDelecao =
-          l.ultimaModificacao ??
-          DateTime.now(); // Lançamento usa ultimaModificacao
-
+      DateTime dataDelecao = l.ultimaModificacao ?? DateTime.now();
       bool podeMatar =
           dataSyncMaisAntiga.isAfter(dataDelecao) ||
           dataDelecao.isBefore(dataLimiteAbsoluta);

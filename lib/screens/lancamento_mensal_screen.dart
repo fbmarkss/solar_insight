@@ -641,7 +641,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
                     children: [
                       Expanded(
                         child: DropdownButtonFormField<Usina>(
-                          value: _usinaSelecionada,
+                          initialValue: _usinaSelecionada,
                           isExpanded: true,
                           onChanged: _isEditando
                               ? null

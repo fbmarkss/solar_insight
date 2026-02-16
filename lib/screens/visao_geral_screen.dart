@@ -1,5 +1,6 @@
 // Caminho: lib/screens/visao_geral_screen.dart
 // Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real e FAB Verde.
+// ATUALIZAÇÃO: Pull-to-Refresh com Feedback Padronizado via AppFeedback.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import '../services/dashboard_provider.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../services/sincronizacao_service.dart';
+import '../utils/app_feedback.dart'; // <-- IMPORT ADICIONADO PARA O PADRÃO DE FEEDBACK
 import 'lancamento_mensal_screen.dart';
 
 class VisaoGeralScreen extends StatefulWidget {
@@ -113,21 +115,23 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
   // ------------------------------------
 
+  // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
   Future<void> _handleRefresh() async {
     Provider.of<DashboardProvider>(context, listen: false).atualizar();
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
       if (!mounted) return;
       Provider.of<DashboardProvider>(context, listen: false).atualizar();
-      if (!resultado.contains('Sincronizado')) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(resultado),
-            backgroundColor: resultado.contains('Erro')
-                ? Colors.red
-                : Colors.green,
-            behavior: SnackBarBehavior.floating,
-          ),
+
+      if (resultado.contains('Erro') || resultado.contains('Sem internet')) {
+        AppFeedback.show(context, resultado, isError: true);
+      } else if (resultado == 'Sincronizado.') {
+        AppFeedback.show(context, "Tudo já está sincronizado.", isError: false);
+      } else {
+        AppFeedback.show(
+          context,
+          "Dados sincronizados com sucesso!",
+          isError: false,
         );
       }
     } catch (e) {
@@ -304,9 +308,9 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                       ),
                       backgroundColor: const Color.fromARGB(
                         255,
-                        58,
-                        55,
-                        236,
+                        235,
+                        136,
+                        90,
                       ), // Cor Verde Solicitada
                       foregroundColor: Colors.white,
                       icon: const Icon(Icons.add),
