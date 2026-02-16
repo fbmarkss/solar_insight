@@ -57,7 +57,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   Future<void> _buscarClimaReal() async {
     try {
       final url = Uri.parse(
-        'https://api.hgbrasil.com/weather?format=json-cors&user_ip=remote',
+        // Adicionada a sua chave (key=c791cabd) para liberar o acesso na Web!
+        'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd&user_ip=remote',
       );
       final response = await http.get(url);
 

@@ -107,37 +107,47 @@ class ResponsiveLayout extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Logo e Título da App
+          // =========================================================
+          // LOGO E TÍTULO (Com Anti-Aliasing e Corte de Borda Fantasma)
+          // =========================================================
           Container(
-            height: 80,
-            alignment: Alignment.centerLeft,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.deepOrange.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.wb_sunny_rounded,
-                    color: Colors.deepOrange,
-                    size: 24,
+                SizedBox(
+                  height: 120,
+                  width: 120,
+                  // O ClipRRect vai "barbear" a borda serrilhada/laranja externa
+                  child: ClipRRect(
+                    // Se o seu arredondamento original for maior, pode aumentar este valor
+                    borderRadius: BorderRadius.circular(24),
+                    child: Image.asset(
+                      'assets/logoweb.png',
+                      fit: BoxFit
+                          .cover, // Preenche o espaço cortando a aresta defeituosa
+                      filterQuality: FilterQuality
+                          .high, // Força a melhor qualidade de redução
+                      isAntiAlias: true, // Suaviza as bordas na Web
+                    ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(height: 16),
                 const Text(
                   'SolarInsight',
                   style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
                     color: Colors.black87,
+                    letterSpacing: 0.5,
                   ),
                 ),
               ],
             ),
           ),
+          // =========================================================
+          // =========================================================
 
           // --- CABEÇALHO DO UTILIZADOR COM DADOS DO FIRESTORE ---
           FutureBuilder<DocumentSnapshot>(

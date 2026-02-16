@@ -131,10 +131,10 @@ class MinhaEquipeScreen extends StatelessWidget {
                       "Enviou convite para: $email",
                     );
 
-                    // 3. Compartilha o link ou mensagem
+                    // 3. Compartilha o link ou mensagem com a URL da Web
                     // ignore: deprecated_member_use
                     await Share.share(
-                      'Olá! Convido-te para participar da minha equipe no App SolarInsight. Se já tens o app, basta abri-lo para aceitar o convite. Se não, usa este e-mail para o cadastro: $email',
+                      'Olá! Convido-te para participares na minha equipe no App SolarInsight.\n\nAcede pelo link: https://solar-insight-pro.web.app/\n\nSe já tens conta, basta fazeres login para aceitares. Se não, usa este e-mail para te cadastrares: $email',
                       subject: 'Convite para Equipe SolarInsight',
                     );
                   } catch (e) {
@@ -469,7 +469,7 @@ class MinhaEquipeScreen extends StatelessWidget {
                                     ),
                                     // ignore: deprecated_member_use
                                     onPressed: () => Share.share(
-                                      "Convite SolarInsight para: $inviteEmail",
+                                      "Olá! Convido-te para participares na minha equipe no App SolarInsight.\n\nAcede pelo link: https://solar-insight-pro.web.app/\n\nSe já tens conta, basta fazeres login para aceitares. Se não, usa este e-mail para te cadastrares: $inviteEmail",
                                     ),
                                   ),
                                   IconButton(
