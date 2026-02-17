@@ -177,7 +177,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                   ); // Fecha o bottom sheet com segurança
                                   // Feedback fora do modal
                                   AppFeedback.show(
-                                    this.context,
+                                    context,
                                     'Inversor calibrado! O histórico foi atualizado.',
                                   );
                                   setState(

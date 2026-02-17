@@ -36,6 +36,7 @@ dependencies:
   connectivity_plus: ^7.0.0
   firebase_app_check: ^0.3.2+10
   http: ^1.6.0
+  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:

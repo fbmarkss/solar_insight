@@ -49,7 +49,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     if (_listaInversores.isEmpty) return 0.0;
     return _listaInversores.fold(
       0.0,
-      (sum, item) => sum + (item.quantidade * item.potenciaKw),
+      (acc, item) => acc + (item.quantidade * item.potenciaKw),
     );
   }
 
@@ -57,7 +57,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     if (_listaPaineis.isEmpty) return 0.0;
     return _listaPaineis.fold(
       0.0,
-      (sum, item) => sum + (item.quantidade * (item.potenciaWatts / 1000)),
+      (acc, item) => acc + (item.quantidade * (item.potenciaWatts / 1000)),
     );
   }
 
@@ -634,10 +634,13 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   @override
   Widget build(BuildContext context) {
     bool isGeradora = _tipoSelecionado == tipoGeradora;
+
+    // CORREÇÃO: Alterado de 'sum' para 'acc' para evitar conflito com tipos do Dart
     double totalRateio = _listaBeneficiarias.fold(
       0.0,
-      (sum, item) => sum + item.percentual,
+      (acc, item) => acc + item.percentual,
     );
+
     double sobraGeradora = 100 - totalRateio;
     bool isCriador = widget.usinaParaEditar?.criadoPor == _currentUid;
     bool podeExcluir = _isAdmin || isCriador;

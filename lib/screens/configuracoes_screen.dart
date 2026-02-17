@@ -110,7 +110,7 @@ class _ConfiguracoesScreenState extends State<ConfiguracoesScreen> {
               children: [
                 // INTERRUPTOR DE PAUSA
                 SwitchListTile(
-                  activeColor: Colors.deepOrange,
+                  activeThumbColor: Colors.deepOrange,
                   secondary: Icon(
                     SincronizacaoService.isPaused
                         ? Icons.cloud_off

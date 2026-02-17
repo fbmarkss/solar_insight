@@ -55,8 +55,9 @@ class SincronizacaoService {
 
   /// Executa a sincronização em segundo plano com trava para não atropelar processos.
   static Future<void> _dispararSyncSilencioso() async {
-    if (_isSyncing || isPaused)
+    if (_isSyncing || isPaused) {
       return; // <-- BLOQUEIO ADICIONADO SE ESTIVER PAUSADO
+    }
 
     _isSyncing = true;
     try {

@@ -69,12 +69,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         );
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         AppFeedback.show(
           context,
           "Erro ao conectar com a nuvem.",
           isError: true,
         );
+      }
     }
   }
 
@@ -162,7 +163,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                           .collection('invites')
                           .doc(inviteId)
                           .update({'status': 'recusado'});
-                      if (mounted) Navigator.pop(ctx);
+
+                      // CORREÇÃO: Verifica o mounted do contexto do próprio Modal (ctx)
+                      if (ctx.mounted) Navigator.pop(ctx);
                     },
                     child: const Text("RECUSAR"),
                   ),
@@ -212,8 +215,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       await SincronizacaoService().sincronizarTudo();
       if (mounted) setState(() {});
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         AppFeedback.show(context, "Erro ao aceitar convite.", isError: true);
+      }
     }
   }
 
