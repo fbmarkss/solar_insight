@@ -764,7 +764,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       child: DropdownButtonHideUnderline(
         child: DropdownButton<Usina?>(
           value: usinaValidaParaDropdown,
-          hint: const Text('Todas as Unidades'),
+          hint: const Text('Todas as Geradoras'),
           isExpanded: true,
           icon: const Icon(Icons.filter_list, color: Colors.deepOrange),
           items: [
