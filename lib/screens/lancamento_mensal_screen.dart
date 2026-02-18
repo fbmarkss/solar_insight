@@ -1,5 +1,5 @@
 // Caminho: lib/screens/lancamento_mensal_screen.dart
-// Descrição: Tela de Lançamento COMPLETA com Padrão Web (Botão X e Cancelar) e suporte ao Nested Navigator.
+// Descrição: Tela de Lançamento COMPLETA com UI Premium, Calculadora Inteligente e Lógica Dinâmica (Geradora/Beneficiária).
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -41,8 +41,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   final _tarifaController = TextEditingController();
   final _custoDemandaController = TextEditingController();
   final _valorFaturaController = TextEditingController();
-  final _saldoAcumuladoController =
-      TextEditingController(); // NOVO: Controlador para o saldo da fatura
+  final _saldoAcumuladoController = TextEditingController();
 
   Usina? _usinaSelecionada;
   DateTime _dataReferencia = DateTime.now();
@@ -138,7 +137,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       }
     }
 
-    // NOVO: Carrega o saldo acumulado (se existir)
     if (l.saldoInformadoNaFatura != null) {
       _saldoAcumuladoController.text = _formatarParaBR(
         l.saldoInformadoNaFatura!,
@@ -337,6 +335,10 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
           lancamentos.first.leituraInversor!,
         );
       });
+    } else {
+      setState(() {
+        _leituraAnteriorController.clear();
+      });
     }
     _verificarDuplicidade();
   }
@@ -344,8 +346,11 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   void _calcularGeracao() {
     double anterior = _converterParaDouble(_leituraAnteriorController.text);
     double atual = _converterParaDouble(_leituraAtualController.text);
-    if (atual > anterior && anterior > 0) {
+
+    if (_leituraAtualController.text.isNotEmpty && atual >= anterior) {
       _geracaoController.text = _formatarParaBR(atual - anterior);
+    } else if (_leituraAtualController.text.isEmpty) {
+      _geracaoController.text = '';
     }
   }
 
@@ -381,20 +386,60 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       saldoInformado = _converterParaDouble(_saldoAcumuladoController.text);
     }
 
-    final box = Hive.box<LancamentoMensal>('lancamentos');
+    final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
     final DateTime agora = DateTime.now();
+
+    // -------------------------------------------------------------------------
+    // FALLBACK INTELIGENTE PARA BENEFICIÁRIAS
+    // Se o usuário salvar uma Beneficiária sem preencher os créditos,
+    // o app faz a matemática sozinho usando os dados da Mãe.
+    // -------------------------------------------------------------------------
+    double injetadaTratada = _converterParaDouble(_injetadaController.text);
+
+    if (!_usinaSelecionada!.isGeradora && injetadaTratada == 0.0) {
+      final boxUsinas = Hive.box<Usina>('usinas');
+      final maes = boxUsinas.values.where(
+        (u) =>
+            u.isGeradora &&
+            u.beneficiarias.any((b) => b.idUsinaFilha == _usinaSelecionada!.id),
+      );
+
+      for (var mae in maes) {
+        try {
+          final vinculo = mae.beneficiarias.firstWhere(
+            (b) => b.idUsinaFilha == _usinaSelecionada!.id,
+          );
+          final lancMae = boxLancamentos.values.firstWhere(
+            (lm) =>
+                lm.usinaId == mae.id &&
+                lm.dataReferencia.year == _dataReferencia.year &&
+                lm.dataReferencia.month == _dataReferencia.month &&
+                !lm.isDeletado,
+          );
+          injetadaTratada +=
+              (lancMae.energiaInjetadaKwh * (vinculo.percentual / 100));
+        } catch (_) {}
+      }
+    }
+    // -------------------------------------------------------------------------
 
     if (_isEditando) {
       final l = widget.lancamentoParaEditar!;
       l.usinaId = _usinaSelecionada!.id;
       l.dataReferencia = _dataReferencia;
-      l.geracaoTotalKwh = _converterParaDouble(_geracaoController.text);
-      l.energiaInjetadaKwh = _converterParaDouble(_injetadaController.text);
+
+      l.geracaoTotalKwh = _usinaSelecionada!.isGeradora
+          ? _converterParaDouble(_geracaoController.text)
+          : 0.0;
+      l.leituraInversor = _usinaSelecionada!.isGeradora
+          ? _converterParaDouble(_leituraAtualController.text)
+          : null;
+
+      l.energiaInjetadaKwh = injetadaTratada; // <-- USA O VALOR TRATADO AQUI
       l.energiaConsumidaRedeKwh = _converterParaDouble(_consumoController.text);
       l.tarifaKwh = tarifa;
       l.valorFaturaR = _converterParaDouble(_valorFaturaController.text);
       l.custoDemandaR = _converterParaDouble(_custoDemandaController.text);
-      l.leituraInversor = _converterParaDouble(_leituraAtualController.text);
       l.saldoInformadoNaFatura = saldoInformado;
       l.ultimaModificacao = agora;
       l.editadoPor = _currentUid;
@@ -410,13 +455,17 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       final novoLancamento = LancamentoMensal(
         usinaId: _usinaSelecionada!.id,
         dataReferencia: _dataReferencia,
-        geracaoTotalKwh: _converterParaDouble(_geracaoController.text),
-        energiaInjetadaKwh: _converterParaDouble(_injetadaController.text),
+        geracaoTotalKwh: _usinaSelecionada!.isGeradora
+            ? _converterParaDouble(_geracaoController.text)
+            : 0.0,
+        energiaInjetadaKwh: injetadaTratada, // <-- USA O VALOR TRATADO AQUI
         energiaConsumidaRedeKwh: _converterParaDouble(_consumoController.text),
         tarifaKwh: tarifa,
         valorFaturaR: _converterParaDouble(_valorFaturaController.text),
         custoDemandaR: _converterParaDouble(_custoDemandaController.text),
-        leituraInversor: _converterParaDouble(_leituraAtualController.text),
+        leituraInversor: _usinaSelecionada!.isGeradora
+            ? _converterParaDouble(_leituraAtualController.text)
+            : null,
         saldoInformadoNaFatura: saldoInformado,
         tenantId: _currentUid,
         criadoPor: _currentUid,
@@ -424,7 +473,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         isDeletado: false,
       );
 
-      await box.add(novoLancamento);
+      await boxLancamentos.add(novoLancamento);
       await SyncQueueService.enqueue('lancamentos', novoLancamento.id);
 
       await _logger.logAction(
@@ -561,8 +610,8 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // PADRÃO WEB: Identifica se está rodando em tela grande (SPA)
     bool isWeb = MediaQuery.of(context).size.width >= 900;
+    bool isGeradora = _usinaSelecionada?.isGeradora ?? true; // Padrão é mostrar
 
     final boxUsinas = Hive.box<Usina>('usinas');
     final listaUsinas = boxUsinas.values
@@ -589,7 +638,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         backgroundColor: Colors.white,
         elevation: 1,
         iconTheme: const IconThemeData(color: Colors.black87),
-        // Padrão Web: Esconde a seta nativa
         automaticallyImplyLeading: !isWeb,
         leading: isWeb
             ? null
@@ -604,7 +652,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
               tooltip: 'Excluir',
               onPressed: _confirmarExclusao,
             ),
-          // Padrão Web: Mostra o "X" grande à direita para fechar o painel
           if (isWeb)
             Padding(
               padding: const EdgeInsets.only(right: 8.0),
@@ -652,7 +699,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
                                   });
                                 },
                           decoration: const InputDecoration(
-                            labelText: 'Usina',
+                            labelText: 'Usina / Instalação',
                             border: InputBorder.none,
                           ),
                           items: listaUsinas
@@ -660,7 +707,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
                                 (u) => DropdownMenuItem(
                                   value: u,
                                   child: Text(
-                                    u.nome,
+                                    '${u.nome} (${u.isGeradora ? 'Geradora' : 'Beneficiária'})',
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -712,59 +759,29 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
               ),
             ),
             if (_avisoDuplicidade != null) _buildAviso(_avisoDuplicidade!),
-            const SizedBox(height: 30),
-            _buildSectionTitle('Leitura do Inversor (E-Total)', Icons.speed),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.blueGrey.withValues(alpha: 0.08),
-                    blurRadius: 15,
-                    offset: const Offset(0, 5),
-                  ),
-                ],
-              ),
-              child: Column(
-                children: [
-                  _buildStylishField(
-                    controller: _leituraAnteriorController,
-                    label: 'Leitura Anterior',
-                    hint: '0,00',
-                    icon: Icons.history,
-                    isKwh: true,
-                  ),
-                  const SizedBox(height: 12),
-                  const Icon(
-                    Icons.arrow_downward,
-                    color: Colors.grey,
-                    size: 20,
-                  ),
-                  const SizedBox(height: 12),
-                  _buildStylishField(
-                    controller: _leituraAtualController,
-                    label: 'Leitura Atual',
-                    hint: '0,00',
-                    icon: Icons.speed,
-                    isKwh: true,
-                  ),
-                  const SizedBox(height: 16),
-                  _buildGeracaoCalculada(),
-                ],
-              ),
-            ),
+
+            // --- NOVO BLOCO DO INVERSOR (SÓ MOSTRA SE FOR GERADORA) ---
+            if (isGeradora) ...[
+              const SizedBox(height: 30),
+              _buildSectionTitle('Leitura do Inversor (E-Total)', Icons.speed),
+              _buildLeituraInversorCard(),
+            ],
+
             const SizedBox(height: 30),
             _buildSectionTitle('Dados da Fatura (Conta)', Icons.receipt_long),
+
+            // --- NOME DINÂMICO PARA ENERGIA INJETADA/RECEBIDA ---
             _buildStylishField(
               controller: _injetadaController,
-              label: 'Energia Injetada (Crédito)',
+              label: isGeradora
+                  ? 'Energia Injetada (Rede)'
+                  : 'Créditos Recebidos/Aplicados',
               hint: '0,00',
               icon: Icons.upload,
               isKwh: true,
               suffix: 'kWh',
             ),
+
             const SizedBox(height: 12),
             _buildStylishField(
               controller: _consumoController,
@@ -839,7 +856,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
               ),
             const SizedBox(height: 30),
 
-            // PADRÃO WEB: BOTÕES INFERIORES LADO A LADO
+            // PADRÃO WEB E MOBILE: BOTÕES INFERIORES
             Row(
               children: [
                 if (isWeb) ...[
@@ -897,47 +914,186 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     );
   }
 
+  // --- UI PREMIUM: CARD DA LEITURA DO INVERSOR ---
+  Widget _buildLeituraInversorCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.orange.shade100),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.orange.withValues(alpha: 0.05),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          _buildTimelineInput(
+            controller: _leituraAnteriorController,
+            label: 'Leitura Inicial (Anterior)',
+            icon: Icons.history,
+            isFirst: true,
+          ),
+
+          // Seta / Linha do Tempo
+          Row(
+            children: [
+              const SizedBox(width: 22), // Alinha com o meio do ícone
+              Container(height: 24, width: 2, color: Colors.grey.shade300),
+            ],
+          ),
+
+          _buildTimelineInput(
+            controller: _leituraAtualController,
+            label: 'Leitura Final (Atual)',
+            icon: Icons.speed,
+            isFirst: false,
+          ),
+
+          const SizedBox(height: 20),
+          _buildGeracaoCalculada(),
+        ],
+      ),
+    );
+  }
+
+  // --- SUBCOMPONENTE DA LINHA DO TEMPO DO INVERSOR ---
+  Widget _buildTimelineInput({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    required bool isFirst,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: isFirst ? Colors.grey.shade100 : Colors.blue.shade50,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            icon,
+            color: isFirst ? Colors.grey.shade600 : Colors.blue.shade700,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.grey.shade600,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  KwhInputFormatter(),
+                ],
+                decoration: const InputDecoration(
+                  hintText: '0,00',
+                  suffixText: 'kWh',
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 4),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // --- CALCULADORA DE GERAÇÃO EM DESTAQUE (CORRIGIDA PARA OVERFLOW) ---
   Widget _buildGeracaoCalculada() {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+      padding: const EdgeInsets.symmetric(
+        vertical: 16,
+        horizontal: 16,
+      ), // Padding ajustado
       decoration: BoxDecoration(
-        color: Colors.orange.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.shade200),
+        gradient: LinearGradient(
+          colors: [Colors.orange.shade400, Colors.deepOrange.shade500],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.deepOrange.withValues(alpha: 0.3),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           const Expanded(
-            child: Text(
-              'Geração Calculada:',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.brown,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GERAÇÃO DESTE MÊS',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white70,
+                    fontSize: 11,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'Automático',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
+          const SizedBox(width: 8),
           SizedBox(
             width: 120,
-            child: TextFormField(
-              controller: _geracaoController,
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-                color: Colors.deepOrange,
+            child: IgnorePointer(
+              ignoring: true,
+              child: TextFormField(
+                controller: _geracaoController,
+                textAlign: TextAlign.right,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 22,
+                  color: Colors.white,
+                ),
+                decoration: const InputDecoration(
+                  hintText: '0,00',
+                  hintStyle: TextStyle(color: Colors.white54),
+                  suffixText: ' kWh',
+                  suffixStyle: TextStyle(color: Colors.white70, fontSize: 16),
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
               ),
-              decoration: const InputDecoration(
-                hintText: '0,00',
-                suffixText: ' kWh',
-                border: InputBorder.none,
-                isDense: true,
-              ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                KwhInputFormatter(),
-              ],
             ),
           ),
         ],

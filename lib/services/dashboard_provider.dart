@@ -160,22 +160,25 @@ class DashboardProvider extends ChangeNotifier {
         tempInvestimentoROI += usina.totalInvestido;
         tempEconomiaROI += metricas.valorTotalEconomizadoR;
       } else {
-        // Se for 0, marcamos que existe uma usina "incompleta" no cálculo
-        tempCountSemInvestimento++;
+        // --- CORREÇÃO CIRÚRGICA 1: Ignora Beneficiárias no contador de erro do ROI ---
+        if (usina.isGeradora) {
+          tempCountSemInvestimento++;
+        }
       }
       // -------------------------------
 
       if (usina.isGeradora) {
         somaPotenciaNominal += usina.potenciaTotalPaineisKwp;
 
-        double percentualDoado = usina.beneficiarias.fold(
-          0.0,
-          (sum, b) => sum + b.percentual,
-        );
-
-        if (percentualDoado > 0) {
-          somaDistribuidaReal +=
-              (metricas.totalInjetadoKwh * (percentualDoado / 100));
+        // --- CORREÇÃO CIRÚRGICA 2: Soma da Distribuição Real ---
+        if (usina.beneficiarias.isNotEmpty) {
+          for (var lancamento in lancamentosUsina) {
+            somaDistribuidaReal +=
+                CalculadoraEnergetica.obterTotalDistribuidoNoMes(
+                  usina,
+                  lancamento,
+                );
+          }
         }
 
         final saude = CalculadoraEnergetica.calcularSaudeSistema(
@@ -249,7 +252,7 @@ class DashboardProvider extends ChangeNotifier {
     totalGerado = somaGeracaoTotal;
     totalEconomizado = somaEconomiaTotal;
     saldoCreditosTotal = somaSaldo;
-    totalEnergiaDistribuida = somaDistribuidaReal;
+    totalEnergiaDistribuida = somaDistribuidaReal; // Agora com o valor correto
     potenciaInstaladaNominal = somaPotenciaNominal;
     totalUsinas = contUsinas;
     geracaoMensal = somaGeracaoMes;

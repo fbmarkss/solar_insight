@@ -1,6 +1,5 @@
 // Caminho: lib/screens/visao_geral_screen.dart
-// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real e FAB Verde.
-// ATUALIZAÇÃO: Pull-to-Refresh com Feedback Padronizado via AppFeedback.
+// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real e Alertas de Otimização de Rateio.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -14,7 +13,8 @@ import '../services/dashboard_provider.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../services/sincronizacao_service.dart';
-import '../utils/app_feedback.dart'; // <-- IMPORT ADICIONADO PARA O PADRÃO DE FEEDBACK
+import '../utils/app_feedback.dart';
+import '../utils/calculadora_energetica.dart';
 import 'lancamento_mensal_screen.dart';
 
 class VisaoGeralScreen extends StatefulWidget {
@@ -57,7 +57,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   Future<void> _buscarClimaReal() async {
     try {
       final url = Uri.parse(
-        // Adicionada a sua chave (key=c791cabd) para liberar o acesso na Web!
         'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd&user_ip=remote',
       );
       final response = await http.get(url);
@@ -136,7 +135,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         );
       }
     } catch (e) {
-      // Ignora erros no refresh visual
+      debugPrint('Erro no refresh visual: $e');
     }
   }
 
@@ -153,7 +152,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
 
     if (isWeb) {
-      // Abre a tela de forma nativa e suave dentro da gaiola direita da Web
       _nestedNavKey.currentState!.push(
         PageRouteBuilder(
           pageBuilder: (context, animation, secondaryAnimation) => tela,
@@ -163,7 +161,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         ),
       );
     } else {
-      // Abre a tela normal no mobile
       Navigator.push(localContext, MaterialPageRoute(builder: (_) => tela));
     }
   }
@@ -200,7 +197,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Verifica a largura real do navegador
     bool isWeb = MediaQuery.of(context).size.width >= 900;
 
     if (isWeb) {
@@ -240,7 +236,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
 
         if (dash.consumoMensalReal > 0) {
           int percentual = (taxaCoberturaMensal * 100).toInt();
-          frasePercentual = "Você produziu $percentual% do seu consumo";
+          frasePercentual = "Você produziu $percentual% do seu consumo total";
 
           if (taxaCoberturaMensal > 1.05) {
             corCobertura = Colors.green;
@@ -264,9 +260,20 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         Widget filtro = _buildFiltro(dash);
         Widget cardAmbiental = _buildEnvironmentalCard(dash.totalGerado);
 
+        // --- BUSCANDO OS ALERTAS DE OTIMIZAÇÃO GERAL ---
+        List<Map<String, dynamic>> alertasTotais = List.from(
+          dash.alertasDoSistema,
+        );
+
+        // Só mostra alerta de otimização se estiver olhando a visão "Todas as Unidades"
+        if (dash.usinaSelecionada == null) {
+          alertasTotais.addAll(
+            CalculadoraEnergetica.gerarAlertaDeOtimizacaoDeRateio(),
+          );
+        }
+
         return LayoutBuilder(
           builder: (context, constraints) {
-            // Decide se o conteúdo é "Largo" ou "Empilhado"
             bool isWidePanel = constraints.maxWidth >= 1000;
 
             return Scaffold(
@@ -282,6 +289,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                       percentualRoi,
                       navContext,
                       isWeb,
+                      alertasTotais,
                     )
                   : _buildMobileLayout(
                       dash,
@@ -294,25 +302,18 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                       frasePercentual,
                       navContext,
                       isWeb,
+                      alertasTotais,
                     ),
 
-              // =========================================================
-              // BOTÃO FLUTUANTE (FAB) VERDE PARA MOBILE E TABLET
-              // =========================================================
               floatingActionButton: isWidePanel
-                  ? null // Se for ecrã Largo, o botão já está no Topo da Toolbar
+                  ? null
                   : FloatingActionButton.extended(
                       onPressed: () => _abrirLancamento(
                         isWeb,
                         navContext,
                         usina: dash.usinaSelecionada,
                       ),
-                      backgroundColor: const Color.fromARGB(
-                        255,
-                        235,
-                        136,
-                        90,
-                      ), // Cor Verde Solicitada
+                      backgroundColor: const Color.fromARGB(255, 136, 186, 90),
                       foregroundColor: Colors.white,
                       icon: const Icon(Icons.add),
                       label: const Text(
@@ -343,6 +344,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     double percentualRoi,
     BuildContext context,
     bool isWeb,
+    List<Map<String, dynamic>> alertasCompletos,
   ) {
     return RefreshIndicator(
       onRefresh: _handleRefresh,
@@ -354,7 +356,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // HEADER FLUIDO (Wrap impede o Overflow)
             Wrap(
               alignment: WrapAlignment.spaceBetween,
               crossAxisAlignment: WrapCrossAlignment.end,
@@ -383,7 +384,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                     ),
                   ],
                 ),
-                // TOOLBAR PADRONIZADA
                 Wrap(
                   spacing: 16,
                   runSpacing: 16,
@@ -421,7 +421,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             ),
             const SizedBox(height: 32),
 
-            // GRID PRINCIPAL
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -469,7 +468,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                         ],
                       ),
                       const SizedBox(height: 24),
-                      _buildAlertasSection(dash.alertasDoSistema),
+                      _buildAlertasSection(alertasCompletos),
                     ],
                   ),
                 ),
@@ -502,7 +501,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
 
   // =====================================================================
-  // LAYOUT MOBILE (Usado para Telemóveis e Tablets)
+  // LAYOUT MOBILE
   // =====================================================================
   Widget _buildMobileLayout(
     DashboardProvider dash,
@@ -515,6 +514,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     String frasePercentual,
     BuildContext context,
     bool isWeb,
+    List<Map<String, dynamic>> alertasCompletos,
   ) {
     return RefreshIndicator(
       color: Colors.deepOrange,
@@ -568,7 +568,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           const SizedBox(height: 16),
           cardAmbiental,
           const SizedBox(height: 24),
-          if (dash.alertasDoSistema.isNotEmpty) ...[
+          if (alertasCompletos.isNotEmpty) ...[
             const Padding(
               padding: EdgeInsets.only(left: 4, bottom: 12),
               child: Text(
@@ -581,13 +581,9 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                 ),
               ),
             ),
-            ...dash.alertasDoSistema.map(
-              (alerta) => _buildAlertaDiscreto(alerta),
-            ),
+            ...alertasCompletos.map((alerta) => _buildAlertaDiscreto(alerta)),
           ],
-          const SizedBox(
-            height: 100,
-          ), // Espaço para o botão flutuante não cobrir conteúdo
+          const SizedBox(height: 100),
         ],
       ),
     );
@@ -620,14 +616,21 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     Map<String, dynamic> alerta, {
     bool isWeb = false,
   }) {
-    Color cor = alerta['cor'] == 'red'
-        ? Colors.red.shade700
-        : Colors.orange.shade700;
-    String prioridade =
-        alerta['tipo'] == 'deficit_real' || alerta['tipo'] == 'queda_acentuada'
-        ? 'Alta'
-        : 'Média';
-    Color prioridadeCor = prioridade == 'Alta' ? Colors.red : Colors.orange;
+    Color cor;
+    String prioridade = 'Média';
+    Color prioridadeCor = Colors.orange;
+
+    if (alerta['tipo'] == 'otimizacao_rateio') {
+      cor = Colors.green.shade600;
+      prioridade = 'Oportunidade';
+      prioridadeCor = Colors.green;
+    } else if (alerta['cor'] == 'red') {
+      cor = Colors.red.shade700;
+      prioridade = 'Alta';
+      prioridadeCor = Colors.red;
+    } else {
+      cor = Colors.orange.shade700;
+    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -647,8 +650,12 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         ],
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(_getIconForType(alerta['tipo']), color: cor, size: 22),
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(_getIconForType(alerta['tipo']), color: cor, size: 24),
+          ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
@@ -656,11 +663,16 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
               children: [
                 Row(
                   children: [
-                    Text(
-                      alerta['titulo'],
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: Text(
+                        alerta['titulo'],
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: alerta['tipo'] == 'otimizacao_rateio'
+                              ? Colors.green.shade800
+                              : Colors.black87,
+                        ),
                       ),
                     ),
                     if (isWeb) ...[
@@ -686,18 +698,23 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                     ],
                   ],
                 ),
+                const SizedBox(height: 4),
                 Text(
                   alerta['mensagem'],
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.grey.shade600,
-                    height: 1.3,
+                    height: 1.4,
                   ),
                 ),
               ],
             ),
           ),
-          if (isWeb) Icon(Icons.chevron_right, color: Colors.grey.shade400),
+          if (isWeb)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Icon(Icons.chevron_right, color: Colors.grey.shade400),
+            ),
         ],
       ),
     );
@@ -715,13 +732,15 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         return Icons.error_outline_rounded;
       case 'distribuicao':
         return Icons.alt_route_rounded;
+      case 'otimizacao_rateio':
+        return Icons.lightbulb_circle;
       default:
         return Icons.info_outline_rounded;
     }
   }
 
   // ===========================================================================
-  // WIDGETS COMUNS
+  // WIDGETS COMUNS E CARTÕES DE RESUMO
   // ===========================================================================
 
   Widget _buildFiltro(DashboardProvider dash) {
@@ -735,11 +754,11 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     }
 
     return Container(
-      height: 48, // Altura padronizada
+      height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12), // Raio padronizado
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey.shade300),
       ),
       child: DropdownButtonHideUnderline(
@@ -752,7 +771,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             const DropdownMenuItem<Usina?>(
               value: null,
               child: Text(
-                'Todas as Unidades (Geral)',
+                'Todas as Unidades (Usinas)',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -986,17 +1005,13 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // ===========================================================================
-  // WIDGETS EXCLUSIVOS WEB
-  // ===========================================================================
-
   Widget _buildWeatherPill(Map<String, dynamic> clima) {
     return Container(
-      height: 48, // Altura padronizada
+      height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12), // Raio padronizado
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey.shade300),
       ),
       child: Row(
@@ -1279,10 +1294,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // ===========================================================================
-  // WIDGETS EXCLUSIVOS MOBILE
-  // ===========================================================================
-
   Widget _buildCardEconomia(DashboardProvider dash) {
     return Container(
       padding: const EdgeInsets.all(24),
@@ -1496,29 +1507,177 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
+  // --- O NOVO WIDGET QUE EXIBE A LISTA DE RATEIO DA GERADORA ---
+  Widget _buildListaDistribuicaoGeradora(DashboardProvider dash) {
+    if (dash.usinaSelecionada == null ||
+        dash.usinaSelecionada!.beneficiarias.isEmpty) {
+      return const SizedBox.shrink(); // Não mostra se for global ou se não tiver filhas
+    }
+
+    final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
+    final lancamentos = boxLancamentos.values
+        .where((l) => l.usinaId == dash.usinaSelecionada!.id && !l.isDeletado)
+        .toList();
+
+    if (lancamentos.isEmpty) return const SizedBox.shrink();
+
+    lancamentos.sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
+    final ultimo = lancamentos.first;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.blue.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.blue.withValues(alpha: 0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.share, size: 16, color: Colors.blue.shade700),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'ÚLTIMO RATEIO (${dash.nomeMesReferencia})',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade700,
+                    letterSpacing: 1.0,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...dash.usinaSelecionada!.beneficiarias.map((b) {
+            // 1. Cálculo Teórico (O Direito da Beneficiária)
+            double repasseTeorico =
+                CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                  dash.usinaSelecionada!,
+                  ultimo,
+                  b.idUsinaFilha,
+                );
+
+            // 2. Busca do Valor Real Inserido no lançamento da Beneficiária
+            double repasseReal = 0;
+            bool temLancamentoReal = false;
+
+            try {
+              final lancFilha = boxLancamentos.values.firstWhere(
+                (l) =>
+                    l.usinaId == b.idUsinaFilha &&
+                    !l.isDeletado &&
+                    l.dataReferencia.year == ultimo.dataReferencia.year &&
+                    l.dataReferencia.month == ultimo.dataReferencia.month,
+              );
+              // Na beneficiária, o crédito recebido (inserido manualmente) fica no campo Injetada
+              if (lancFilha.energiaInjetadaKwh > 0) {
+                repasseReal = lancFilha.energiaInjetadaKwh;
+                temLancamentoReal = true;
+              }
+            } catch (_) {
+              // Filha ainda não tem lançamento neste mês
+            }
+
+            // Define o que será exibido (Prioridade para o Real/Inserido)
+            double valorExibido = temLancamentoReal
+                ? repasseReal
+                : repasseTeorico;
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${b.nome} (${b.percentual.toStringAsFixed(0)}%)',
+                      style: TextStyle(
+                        color: Colors.blueGrey.shade700,
+                        fontSize: 13,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '${numeroFormat.format(valorExibido)} kWh Real enviado',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                          color: Colors.blue.shade700,
+                        ),
+                      ),
+                      // Exibe aviso se o que a pessoa inseriu for menor que o teórico
+                      if (temLancamentoReal &&
+                          (repasseTeorico - repasseReal) > 0.5)
+                        Text(
+                          'Teórico Calculado: ${numeroFormat.format(repasseTeorico)} kWh',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.orange.shade700,
+                          ),
+                        )
+                      else if (!temLancamentoReal)
+                        Text(
+                          'Teórico (Pendente Lanc.)',
+                          style: TextStyle(
+                            fontSize: 9,
+                            color: Colors.blueGrey.shade300,
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStatsRow(DashboardProvider dash) {
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: _buildStatCard(
-            'Potência Instalada',
-            '${dash.potenciaInstaladaNominal.toStringAsFixed(1)} kWp',
-            Icons.solar_power,
-            Colors.orange,
-            subInfo:
-                'Eficiência: ${dash.eficienciaGlobalMedia.toStringAsFixed(1)}%',
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: _buildStatCard(
+                'Potência Instalada',
+                '${dash.potenciaInstaladaNominal.toStringAsFixed(1)} kWp',
+                Icons.solar_power,
+                Colors.orange,
+                subInfo:
+                    'Eficiência: ${dash.eficienciaGlobalMedia.toStringAsFixed(1)}%',
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: _buildStatCard(
+                'Energia Distribuída',
+                '${(dash.totalEnergiaDistribuida / 1000).toStringAsFixed(1)} MWh',
+                Icons.share,
+                Colors.blue,
+                subInfo: 'Vitalicio Pelas Geradoras',
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: _buildStatCard(
-            'Energia Distribuída',
-            '${(dash.totalEnergiaDistribuida / 1000).toStringAsFixed(1)} MWh',
-            Icons.share,
-            Colors.blue,
-            subInfo: 'Beneficiárias',
-          ),
-        ),
+        // --- A LISTA AGORA FICA ABAIXO DOS DOIS CARDS OCUPANDO TODA A LARGURA ---
+        _buildListaDistribuicaoGeradora(dash),
       ],
     );
   }

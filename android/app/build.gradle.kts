@@ -1,3 +1,13 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+// 1. Lógica para ler o arquivo key.properties
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -36,10 +46,23 @@ android {
         multiDexEnabled = true 
     }
 
+    // 2. Configuração de Assinatura para a Play Store
+    signingConfigs {
+        create("release") {
+            keyAlias = keystoreProperties.getProperty("keyAlias")
+            keyPassword = keystoreProperties.getProperty("keyPassword")
+            val storeFilePath = keystoreProperties.getProperty("storeFile")
+            if (storeFilePath != null) {
+                storeFile = file(storeFilePath)
+            }
+            storePassword = keystoreProperties.getProperty("storePassword")
+        }
+    }
+
     buildTypes {
         release {
-            // Assinando com a chave de debug por enquanto para testes
-            signingConfig = signingConfigs.getByName("debug")
+            // 3. Trocamos o "debug" para "release" para assinar com a chave oficial
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

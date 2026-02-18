@@ -1,6 +1,6 @@
 // Caminho: lib/screens/usina_detalhes_screen.dart
 // Descrição: Dashboard de Performance da Usina.
-// ATUALIZAÇÃO: BottomSheet elegante e seguro para Calibração de Inversor.
+// ATUALIZAÇÃO: Card dinâmico (Dados do Sistema vs Perfil de Consumo).
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -26,14 +26,13 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
   final _moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   final _numero = NumberFormat.decimalPattern('pt_BR');
 
-  // --- NOVA FUNÇÃO: CALIBRAR INVERSOR (VIA BOTTOM SHEET ELEGANTE) ---
+  // --- FUNÇÃO: CALIBRAR INVERSOR ---
   void _mostrarBottomSheetCalibracao(
     double totalGeradoAtual,
     int quantidadeMeses,
   ) {
     final TextEditingController controller = TextEditingController();
-    bool isCalibrando =
-        false; // Controle de estado para mostrar o loading no botão
+    bool isCalibrando = false;
 
     showModalBottomSheet(
       context: context,
@@ -96,7 +95,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         ),
                         suffixText: 'kWh',
                       ),
-                      enabled: !isCalibrando, // Trava o campo enquanto carrega
+                      enabled: !isCalibrando,
                     ),
                     const SizedBox(height: 12),
                     Text(
@@ -136,18 +135,15 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                   return;
                                 }
 
-                                // Inicia o estado de Loading no botão
                                 setModalState(() {
                                   isCalibrando = true;
                                 });
 
-                                // A MATEMÁTICA
                                 double diferenca =
                                     novaLeitura - totalGeradoAtual;
                                 double acressimoPorMes =
                                     diferenca / quantidadeMeses;
 
-                                // ATUALIZAR BANCO
                                 final box = Hive.box<LancamentoMensal>(
                                   'lancamentos',
                                 );
@@ -172,17 +168,12 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                 }
 
                                 if (context.mounted) {
-                                  Navigator.pop(
-                                    context,
-                                  ); // Fecha o bottom sheet com segurança
-                                  // Feedback fora do modal
+                                  Navigator.pop(context);
                                   AppFeedback.show(
                                     context,
                                     'Inversor calibrado! O histórico foi atualizado.',
                                   );
-                                  setState(
-                                    () {},
-                                  ); // Força rebuild da tela mãe para atualizar os números
+                                  setState(() {});
                                 }
                               },
                         child: isCalibrando
@@ -224,6 +215,75 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     );
   }
 
+  // --- FUNÇÃO: HISTÓRICO EXPANDIDO ---
+  void _mostrarHistoricoCompleto(
+    BuildContext context,
+    List<LancamentoMensal> todosLancamentos,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.90,
+          decoration: const BoxDecoration(
+            color: Color(0xFFF5F7FA),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade300,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 16, 16, 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Histórico Completo',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.grey),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
+                  ),
+                  itemCount: todosLancamentos.length,
+                  itemBuilder: (context, index) {
+                    return _buildLancamentoCard(todosLancamentos[index]);
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -245,7 +305,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                   builder: (_) =>
                       CadastroUsinaScreen(usinaParaEditar: widget.usina),
                 ),
-              );
+              ).then((_) => setState(() {}));
             },
           ),
         ],
@@ -253,28 +313,27 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       body: ValueListenableBuilder(
         valueListenable: Hive.box<LancamentoMensal>('lancamentos').listenable(),
         builder: (context, Box<LancamentoMensal> box, _) {
-          // FILTRO CRUCIAL: Ignorar lançamentos deletados
           final lancamentos = box.values
               .where((l) => l.usinaId == widget.usina.id && !l.isDeletado)
               .toList();
 
-          final lancamentosOrdenados = List.from(lancamentos);
+          final lancamentosOrdenados = List<LancamentoMensal>.from(lancamentos);
           lancamentosOrdenados.sort(
             (a, b) => b.dataReferencia.compareTo(a.dataReferencia),
           );
+
+          final ultimos6Lancamentos = lancamentosOrdenados.take(6).toList();
 
           final metricas = CalculadoraEnergetica.calcularMetricasGerais(
             widget.usina,
             lancamentos,
           );
 
-          // CÁLCULO DO TOTAL CONSUMIDO DA REDE (CONCESSIONÁRIA)
           double totalConsumidoDaRede = lancamentos.fold(
             0.0,
             (sum, l) => sum + l.energiaConsumidaRedeKwh,
           );
 
-          // MATEMÁTICA DA ENERGIA RETIDA PELA TAXA MÍNIMA
           double creditosUsados =
               metricas.totalInjetadoKwh - metricas.saldoCreditosEstimado;
           double retidoConcessionaria = totalConsumidoDaRede - creditosUsados;
@@ -315,33 +374,35 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                   autoconsumo + ultimo.energiaConsumidaRedeKwh;
             } else {
               ultimoMesConsumoReal = ultimo.energiaConsumidaRedeKwh;
-              final boxUsinas = Hive.box<Usina>('usinas');
-              final maes = boxUsinas.values.where(
-                (u) =>
-                    u.isGeradora &&
-                    !u.isDeletado && // Usina mãe também não pode estar deletada
-                    u.beneficiarias.any(
-                      (b) => b.idUsinaFilha == widget.usina.id,
-                    ),
-              );
 
-              for (var mae in maes) {
-                final vinculo = mae.beneficiarias.firstWhere(
-                  (b) => b.idUsinaFilha == widget.usina.id,
+              if (ultimo.energiaInjetadaKwh > 0) {
+                ultimoMesProducaoOuRecebido = ultimo.energiaInjetadaKwh;
+              } else {
+                final boxUsinas = Hive.box<Usina>('usinas');
+                final maes = boxUsinas.values.where(
+                  (u) =>
+                      u.isGeradora &&
+                      !u.isDeletado &&
+                      u.beneficiarias.any(
+                        (b) => b.idUsinaFilha == widget.usina.id,
+                      ),
                 );
 
-                try {
-                  final lancMae = box.values.firstWhere(
-                    (l) =>
-                        l.usinaId == mae.id &&
-                        !l.isDeletado && // Lançamento da mãe não pode estar deletado
-                        l.dataReferencia.year == ultimo.dataReferencia.year &&
-                        l.dataReferencia.month == ultimo.dataReferencia.month,
+                for (var mae in maes) {
+                  final vinculo = mae.beneficiarias.firstWhere(
+                    (b) => b.idUsinaFilha == widget.usina.id,
                   );
-                  ultimoMesProducaoOuRecebido +=
-                      lancMae.energiaInjetadaKwh * (vinculo.percentual / 100);
-                } catch (_) {
-                  // Se não encontrar lançamento da mãe para o mês, ignora.
+                  try {
+                    final lancMae = box.values.firstWhere(
+                      (l) =>
+                          l.usinaId == mae.id &&
+                          !l.isDeletado &&
+                          l.dataReferencia.year == ultimo.dataReferencia.year &&
+                          l.dataReferencia.month == ultimo.dataReferencia.month,
+                    );
+                    ultimoMesProducaoOuRecebido +=
+                        lancMae.energiaInjetadaKwh * (vinculo.percentual / 100);
+                  } catch (_) {}
                 }
               }
             }
@@ -384,22 +445,30 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               ),
               const SizedBox(height: 20),
 
-              // --- DADOS TÉCNICOS (AGORA COM O BOTÃO DE CALIBRAR SE FOR GERADORA) ---
-              _buildDadosTecnicosCard(
-                widget.usina,
-                metricas.totalGeradoKwh,
-                lancamentos.length,
-              ),
+              // --- A MÁGICA ACONTECE AQUI: CARD DINÂMICO ---
+              if (widget.usina.isGeradora)
+                _buildDadosTecnicosCard(
+                  widget.usina,
+                  metricas.totalGeradoKwh,
+                  lancamentos.length,
+                )
+              else
+                _buildPerfilConsumoCard(
+                  widget.usina,
+                  metricas.mediaConsumo3Meses,
+                ),
+              // ---------------------------------------------
               const SizedBox(height: 20),
 
-              // ------------------------------------
               if (ultimoLancamento != null)
                 _buildCardPerformanceMensal(
                   nomeUltimoMes,
                   ultimoMesProducaoOuRecebido,
                   ultimoMesConsumoReal,
+                  ultimoLancamento,
                 ),
               const SizedBox(height: 10),
+
               if (widget.usina.isGeradora && saudeSistema.isNotEmpty) ...[
                 const Text(
                   'SAÚDE E CAPACIDADE',
@@ -427,6 +496,43 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               _buildTotalEconomiaCard(metricas.valorTotalEconomizadoR),
               const SizedBox(height: 12),
               _buildSaldoCreditosCard(metricas.saldoCreditosEstimado),
+              const SizedBox(height: 12),
+
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.orange.shade500,
+                      Colors.deepOrange.shade600,
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      widget.usina.isGeradora
+                          ? 'Total Exportado'
+                          : 'Total Recebido',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      '${_numero.format(metricas.totalInjetadoKwh)} kWh',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
               const SizedBox(height: 16),
               if (widget.usina.totalInvestido > 0 &&
                   widget.usina.isGeradora) ...[
@@ -438,7 +544,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                 const SizedBox(height: 16),
               ],
 
-              // --- CARDS DE MÉTRICAS ALINHADOS ---
               if (widget.usina.isGeradora) ...[
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -471,8 +576,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                     ),
                   ],
                 ),
-
-                // --- CARD EXPLICATIVO VERMELHO SOBRE A TAXA MÍNIMA ---
                 const SizedBox(height: 12),
                 Container(
                   width: double.infinity,
@@ -526,49 +629,59 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                     ],
                   ),
                 ),
-              ] else ...[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: _buildMetricTile(
-                        'Total Recebido',
-                        '${_numero.format(metricas.totalInjetadoKwh)} kWh',
-                        Icons.bolt,
-                        Colors.blue,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildMetricTile(
-                        'Consumo Total',
-                        '${_numero.format(metricas.mediaConsumo3Meses * lancamentos.length)} kWh',
-                        Icons.download,
-                        Colors.red,
-                      ),
-                    ),
-                  ],
-                ),
               ],
 
-              // --- FIM DOS CARDS DE MÉTRICAS ---
               const SizedBox(height: 25),
-              const Padding(
-                padding: EdgeInsets.only(left: 4, bottom: 10),
-                child: Text(
-                  'HISTÓRICO DE LANÇAMENTOS',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blueGrey,
-                    fontSize: 12,
-                    letterSpacing: 1.2,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'HISTÓRICO RECENTE',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blueGrey,
+                      fontSize: 12,
+                      letterSpacing: 1.2,
+                    ),
                   ),
-                ),
+                  Text(
+                    '${lancamentosOrdenados.length} no total',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
               ),
+              const SizedBox(height: 10),
+
               if (lancamentosOrdenados.isEmpty)
                 _buildEmptyState()
-              else
-                ...lancamentosOrdenados.map((l) => _buildLancamentoCard(l)),
+              else ...[
+                ...ultimos6Lancamentos.map((l) => _buildLancamentoCard(l)),
+
+                if (lancamentosOrdenados.length > 6)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8.0),
+                    child: OutlinedButton(
+                      onPressed: () => _mostrarHistoricoCompleto(
+                        context,
+                        lancamentosOrdenados,
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        side: BorderSide(color: Colors.deepOrange.shade200),
+                      ),
+                      child: const Text(
+                        'VER TODO O HISTÓRICO',
+                        style: TextStyle(
+                          color: Colors.deepOrange,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
               const SizedBox(height: 80),
             ],
           );
@@ -588,7 +701,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               builder: (_) =>
                   LancamentoMensalScreen(usinaPreSelecionada: widget.usina),
             ),
-          );
+          ).then((_) => setState(() {}));
         },
       ),
     );
@@ -599,8 +712,9 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     LancamentoMensal lancamento,
   ) {
     double autoconsumo = 0;
-    double totalCreditoRecebido = 0;
-    List<Map<String, dynamic>> listaCreditos = [];
+
+    double totalCreditoTeorico = 0;
+    List<Map<String, dynamic>> listaCreditosTeoricos = [];
 
     if (widget.usina.isGeradora) {
       autoconsumo = lancamento.geracaoTotalKwh - lancamento.energiaInjetadaKwh;
@@ -629,12 +743,15 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                 l.dataReferencia.year == lancamento.dataReferencia.year &&
                 l.dataReferencia.month == lancamento.dataReferencia.month,
           );
-          double recebido =
+          double recebidoTeorico =
               lancMae.energiaInjetadaKwh * (vinculo.percentual / 100);
-          totalCreditoRecebido += recebido;
-          listaCreditos.add({'nome': mae.nome, 'valor': recebido});
+          totalCreditoTeorico += recebidoTeorico;
+          listaCreditosTeoricos.add({
+            'nome': mae.nome,
+            'valor': recebidoTeorico,
+          });
         } catch (e) {
-          // Ignora erros silenciosamente
+          // Ignora erros
         }
       }
     }
@@ -642,13 +759,15 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     double consumoTotalReal = 0;
     double saldoFisico = 0;
 
+    double creditoPratico = lancamento.energiaInjetadaKwh;
+
     if (widget.usina.isGeradora) {
       consumoTotalReal = autoconsumo + lancamento.energiaConsumidaRedeKwh;
       saldoFisico =
           lancamento.energiaInjetadaKwh - lancamento.energiaConsumidaRedeKwh;
     } else {
       consumoTotalReal = lancamento.energiaConsumidaRedeKwh;
-      saldoFisico = totalCreditoRecebido - lancamento.energiaConsumidaRedeKwh;
+      saldoFisico = creditoPratico - lancamento.energiaConsumidaRedeKwh;
     }
 
     showModalBottomSheet(
@@ -706,7 +825,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                               lancamentoParaEditar: lancamento,
                             ),
                           ),
-                        );
+                        ).then((_) => setState(() {}));
                       },
                     ),
                   ],
@@ -819,14 +938,14 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                     MainAxisAlignment.spaceBetween,
                                 children: [
                                   const Text(
-                                    'Crédito Aplicado',
+                                    'Crédito Aplicado (Fatura)',
                                     style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       color: Colors.green,
                                     ),
                                   ),
                                   Text(
-                                    '- ${_numero.format(totalCreditoRecebido)} kWh',
+                                    '- ${_numero.format(creditoPratico)} kWh',
                                     style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 16,
@@ -844,12 +963,13 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         'Consumo e Fatura',
                         Icons.receipt_long,
                       ),
+
                       if (widget.usina.isBeneficiaria &&
-                          listaCreditos.isNotEmpty) ...[
+                          listaCreditosTeoricos.isNotEmpty) ...[
                         const Padding(
                           padding: EdgeInsets.only(bottom: 8),
                           child: Text(
-                            'Origem dos Créditos:',
+                            'Origem dos Créditos (Cálculo Teórico):',
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
@@ -857,15 +977,54 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                             ),
                           ),
                         ),
-                        ...listaCreditos.map(
+                        ...listaCreditosTeoricos.map(
                           (c) => _buildDetailRow(
                             ' - ${c['nome']}',
                             '${_numero.format(c['valor'])} kWh',
-                            colorValue: Colors.green,
+                            colorValue: Colors.blueGrey,
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        _buildDetailRow(
+                          'Total Teórico (Seu Direito)',
+                          '${_numero.format(totalCreditoTeorico)} kWh',
+                          boldValue: true,
+                        ),
+                        _buildDetailRow(
+                          'Crédito Aplicado (Real na Fatura)',
+                          '${_numero.format(creditoPratico)} kWh',
+                          boldValue: true,
+                          colorValue: Colors.green,
+                        ),
+
+                        if ((totalCreditoTeorico - creditoPratico).abs() > 0.1)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8, bottom: 8),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.warning_amber_rounded,
+                                  color: Colors.orange,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    'Diferença (Perda/Retenção): ${_numero.format(totalCreditoTeorico - creditoPratico)} kWh',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.orange.shade800,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    textAlign: TextAlign.right,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         const Divider(height: 16, indent: 20, endIndent: 20),
                       ],
+
                       if (widget.usina.isGeradora)
                         _buildDetailRow(
                           'Consumo Total do Local',
@@ -998,6 +1157,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     );
   }
 
+  // --- CARTÃO DA GERADORA ---
   Widget _buildDadosTecnicosCard(
     Usina usina,
     double totalGeradoAtual,
@@ -1100,6 +1260,80 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     );
   }
 
+  // --- NOVO CARTÃO DA BENEFICIÁRIA ---
+  Widget _buildPerfilConsumoCard(Usina usina, double mediaConsumo) {
+    String taxaMinima = "100 kWh (Trifásico)";
+    if (usina.tipo.toLowerCase().contains('monof')) {
+      taxaMinima = "30 kWh (Monofásico)";
+    }
+    if (usina.tipo.toLowerCase().contains('bif')) {
+      taxaMinima = "50 kWh (Bifásico)";
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(color: Colors.grey.withValues(alpha: 0.05), blurRadius: 15),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.home_work,
+                  color: Colors.blue,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Text(
+                'Perfil da Instalação',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blueGrey,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildDetailRow(
+            'Concessionária',
+            usina.concessionaria.isNotEmpty
+                ? usina.concessionaria
+                : 'Não informada',
+            boldValue: true,
+            colorValue: Colors.black87,
+          ),
+          const Divider(height: 24),
+          _buildDetailRow(
+            'Média de Consumo (3 Meses)',
+            '${_numero.format(mediaConsumo)} kWh',
+            colorValue: Colors.orange.shade700,
+            boldValue: true,
+          ),
+          const SizedBox(height: 8),
+          _buildDetailRow(
+            'Taxa Mínima Obrigatória',
+            taxaMinima,
+            isSubtle: true,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCardSaudeSistema(Map<String, dynamic> dados, double ideal) {
     double ef = dados['eficiencia'];
     return Container(
@@ -1145,7 +1379,12 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     );
   }
 
-  Widget _buildCardPerformanceMensal(String mes, double prod, double cons) {
+  Widget _buildCardPerformanceMensal(
+    String mes,
+    double prod,
+    double cons,
+    LancamentoMensal ultimoLancamento,
+  ) {
     return Container(
       padding: const EdgeInsets.all(20),
       margin: const EdgeInsets.only(bottom: 12),
@@ -1221,6 +1460,69 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               ),
             ],
           ),
+          if (widget.usina.isGeradora &&
+              widget.usina.beneficiarias.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Divider(height: 1),
+            ),
+            const Text(
+              'EXPORTADO PARA BENEFICIÁRIAS',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Colors.blueGrey,
+                letterSpacing: 1.0,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ...widget.usina.beneficiarias.map((b) {
+              double enviadoParaEsta =
+                  CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                    widget.usina,
+                    ultimoLancamento,
+                    b.idUsinaFilha,
+                  );
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.arrow_forward_rounded,
+                            size: 14,
+                            color: Colors.green.shade600,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '${b.nome} (${b.percentual.toStringAsFixed(0)}%)',
+                              style: TextStyle(
+                                color: Colors.grey.shade800,
+                                fontSize: 13,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      '${_numero.format(enviadoParaEsta)} kWh',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Colors.green,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
         ],
       ),
     );
@@ -1343,17 +1645,36 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     child: ListTile(
       onTap: () => _mostrarDetalhesLancamento(context, item),
       leading: Container(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
           color: Colors.grey.shade50,
           borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey.shade200),
         ),
-        child: Text(
-          DateFormat('MMM', 'pt_BR').format(item.dataReferencia).toUpperCase(),
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Colors.grey.shade800,
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              DateFormat(
+                'MMM',
+                'pt_BR',
+              ).format(item.dataReferencia).toUpperCase(),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade800,
+                fontSize: 14,
+              ),
+            ),
+            Text(
+              DateFormat('yyyy').format(item.dataReferencia),
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade500,
+                fontSize: 10,
+              ),
+            ),
+          ],
         ),
       ),
       title: Text(
@@ -1417,5 +1738,13 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     ),
   );
 
-  Widget _buildEmptyState() => const Center(child: Text("Sem dados."));
+  Widget _buildEmptyState() => const Padding(
+    padding: EdgeInsets.symmetric(vertical: 30),
+    child: Center(
+      child: Text(
+        "Sem dados registrados.",
+        style: TextStyle(color: Colors.grey),
+      ),
+    ),
+  );
 }

@@ -1,5 +1,6 @@
 // Caminho: lib/services/sincronizacao_service.dart
 // Status: 100% COMPLETO | Motor Reativo Background + Smart Garbage Collector.
+// ATUALIZAÇÃO: Correção no empacotamento de Investimentos e Beneficiárias.
 
 import 'dart:async'; // Necessário para o StreamSubscription do Motor
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -447,7 +448,7 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // HELPERS DE CONVERSÃO
+  // HELPERS DE CONVERSÃO (CORRIGIDOS PARA INVESTIMENTOS E BENEFICIÁRIAS)
   // ===========================================================================
 
   DateTime _converterParaDateTime(dynamic valor) {
@@ -487,6 +488,25 @@ class SincronizacaoService {
             },
           )
           .toList(),
+      // --- CORREÇÃO: ADICIONADO EMPACOTAMENTO ---
+      'investimentos': u.investimentos
+          .map(
+            (inv) => {
+              'data': inv.data.millisecondsSinceEpoch,
+              'descricao': inv.descricao,
+              'valor': inv.valor,
+            },
+          )
+          .toList(),
+      'beneficiarias': u.beneficiarias
+          .map(
+            (b) => {
+              'nome': b.nome,
+              'idUsinaFilha': b.idUsinaFilha,
+              'percentual': b.percentual,
+            },
+          )
+          .toList(),
     };
   }
 
@@ -520,6 +540,25 @@ class SincronizacaoService {
             ),
           )
           .toList(),
+      // --- CORREÇÃO: ADICIONADO DESEMPACOTAMENTO ---
+      investimentos: (map['investimentos'] as List? ?? [])
+          .map(
+            (inv) => InvestimentoItem(
+              data: _converterParaDateTime(inv['data']),
+              descricao: inv['descricao'],
+              valor: (inv['valor'] as num).toDouble(),
+            ),
+          )
+          .toList(),
+      beneficiarias: (map['beneficiarias'] as List? ?? [])
+          .map(
+            (b) => BeneficiariaItem(
+              nome: b['nome'] ?? '',
+              idUsinaFilha: b['idUsinaFilha'] ?? '',
+              percentual: (b['percentual'] as num).toDouble(),
+            ),
+          )
+          .toList(),
     );
   }
 
@@ -528,6 +567,13 @@ class SincronizacaoService {
     u.concessionaria = m['concessionaria'] ?? u.concessionaria;
     u.ativa = m['ativa'] ?? u.ativa;
     u.isDeletado = m['isDeletado'] ?? false;
+
+    // Atualiza também os campos complexos para refletir edições de outros usuários
+    final usinaAtualizada = _mapToUsina(m, u.idRemoto!);
+    u.inversores = usinaAtualizada.inversores;
+    u.paineis = usinaAtualizada.paineis;
+    u.investimentos = usinaAtualizada.investimentos;
+    u.beneficiarias = usinaAtualizada.beneficiarias;
   }
 
   void _atualizarLancamentoComMap(LancamentoMensal l, Map<String, dynamic> m) {
