@@ -771,7 +771,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             const DropdownMenuItem<Usina?>(
               value: null,
               child: Text(
-                'Todas as Unidades (Usinas)',
+                'Todas as Geradoras',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
