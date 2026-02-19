@@ -1271,8 +1271,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           const SizedBox(height: 12),
           _buildTechRow(
             Icons.share_location,
-            'Unidades',
-            dash.totalEnergiaDistribuida > 0 ? 'Ativas' : 'Inativas',
+            'Distribuição',
+            dash.totalEnergiaDistribuida > 0 ? 'Distribuindo' : 'Sem Repasses',
           ),
         ],
       ),
