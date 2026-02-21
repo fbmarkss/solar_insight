@@ -1,5 +1,5 @@
 // Caminho: lib/services/data_backup_service.dart
-// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral.
+// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA.
 
 import 'dart:convert';
 import 'dart:io';
@@ -37,10 +37,8 @@ class DataBackupService {
   // --- HELPER MÁGICO: Lê ficheiros quer na Web (Bytes) quer no Mobile (Path) ---
   static Future<String> _lerConteudoArquivo(FilePickerResult result) async {
     if (kIsWeb) {
-      // Na Web, o 'path' é nulo por segurança. Lemos diretamente da memória (bytes).
       return utf8.decode(result.files.single.bytes!);
     } else {
-      // No Mobile/Desktop, podemos ler através do caminho do ficheiro (path).
       File file = File(result.files.single.path!);
       return await file.readAsString();
     }
@@ -103,7 +101,6 @@ class DataBackupService {
       [0xEF, 0xBB, 0xBF] + utf8.encode(csvData),
     );
 
-    // CORREÇÃO PARA WEB: Usar saveFile na Web (Download direto) e saveAs no Mobile (Escolher pasta)
     if (kIsWeb) {
       await FileSaver.instance.saveFile(
         name: nomeArquivo,
@@ -125,7 +122,7 @@ class DataBackupService {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['csv'],
-      withData: kIsWeb, // OBRIGATÓRIO PARA A WEB CARREGAR OS BYTES
+      withData: kIsWeb,
     );
 
     if (result == null) return "Cancelado";
@@ -134,7 +131,6 @@ class DataBackupService {
     if (userCtx == null) throw Exception("Utilizador não autenticado.");
     final agora = DateTime.now();
 
-    // UTILIZA O HELPER SEGURO PARA WEB E MOBILE
     String content = await _lerConteudoArquivo(result);
     List<List<dynamic>> rows = const CsvToListConverter(
       fieldDelimiter: ';',
@@ -213,6 +209,7 @@ class DataBackupService {
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
 
     List<List<dynamic>> rows = [];
+    // O Relatório CSV simples não exporta tudo, é só pra visualização do utilizador. O Backup JSON é que faz o trabalho pesado.
     rows.add([
       "ID_UC",
       "Nome da Usina",
@@ -220,7 +217,7 @@ class DataBackupService {
       "Geração",
       "Injetada",
       "Consumo",
-      "Tarifa",
+      "Tarifa Média",
       "Fatura",
       "Demanda",
       "Leitura Inversor",
@@ -258,7 +255,6 @@ class DataBackupService {
       [0xEF, 0xBB, 0xBF] + utf8.encode(csvData),
     );
 
-    // CORREÇÃO PARA WEB: Usar saveFile na Web e saveAs no Mobile
     if (kIsWeb) {
       await FileSaver.instance.saveFile(
         name: nomeArquivo,
@@ -280,7 +276,7 @@ class DataBackupService {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['csv'],
-      withData: kIsWeb, // OBRIGATÓRIO PARA A WEB
+      withData: kIsWeb,
     );
     if (result == null) return "Cancelado";
 
@@ -288,7 +284,6 @@ class DataBackupService {
     if (userCtx == null) throw Exception("Utilizador não autenticado.");
     final agora = DateTime.now();
 
-    // UTILIZA O HELPER SEGURO PARA WEB E MOBILE
     String content = await _lerConteudoArquivo(result);
     List<List<dynamic>> rows = const CsvToListConverter(
       fieldDelimiter: ';',
@@ -341,7 +336,7 @@ class DataBackupService {
   }
 
   // ===========================================================================
-  // --- BACKUP COMPLETO (JSON) INTEGRAL ---
+  // --- BACKUP COMPLETO (JSON) INTEGRAL (COM CAMPOS DA IA) ---
   // ===========================================================================
 
   static Future<void> exportarBackupJson(String nomeArquivo) async {
@@ -411,12 +406,25 @@ class DataBackupService {
             'custoDemandaR': l.custoDemandaR,
             'leituraInversor': l.leituraInversor,
             'observacao': l.observacao,
+            // --- NOVOS CAMPOS DA IA ADICIONADOS AQUI ---
+            'grupoTarifario': l.grupoTarifario,
+            'modalidadeTarifaria': l.modalidadeTarifaria,
+            'tarifaTeUnica': l.tarifaTeUnica,
+            'tarifaTusdUnica': l.tarifaTusdUnica,
+            'tarifaTePonta': l.tarifaTePonta,
+            'tarifaTusdPonta': l.tarifaTusdPonta,
+            'tarifaTeForaPonta': l.tarifaTeForaPonta,
+            'tarifaTusdForaPonta': l.tarifaTusdForaPonta,
+            'custoIluminacaoPublica': l.custoIluminacaoPublica,
+            'multaReativo': l.multaReativo,
+            'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
+            // ---------------------------------------------
           },
         )
         .toList();
 
     final backupData = {
-      'versao': '1.2',
+      'versao': '1.3', // Subimos a versão do Backup por ter novos campos
       'dataBackup': DateTime.now().toIso8601String(),
       'usinas': usinasMap,
       'lancamentos': lancamentosMap,
@@ -426,7 +434,6 @@ class DataBackupService {
       utf8.encode(jsonEncode(backupData)),
     );
 
-    // CORREÇÃO PARA WEB: Usar saveFile na Web e saveAs no Mobile
     if (kIsWeb) {
       await FileSaver.instance.saveFile(
         name: nomeArquivo,
@@ -448,7 +455,7 @@ class DataBackupService {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['json'],
-      withData: kIsWeb, // OBRIGATÓRIO PARA A WEB
+      withData: kIsWeb,
     );
     if (result == null) return "Cancelado";
 
@@ -456,7 +463,6 @@ class DataBackupService {
     if (userCtx == null) throw Exception("Utilizador não autenticado.");
     final agora = DateTime.now();
 
-    // UTILIZA O HELPER SEGURO PARA WEB E MOBILE
     String content = await _lerConteudoArquivo(result);
     Map<String, dynamic> data = jsonDecode(content);
 
@@ -577,6 +583,22 @@ class DataBackupService {
           custoDemandaR: (lMap['custoDemandaR'] as num).toDouble(),
           leituraInversor: (lMap['leituraInversor'] as num?)?.toDouble(),
           observacao: lMap['observacao'],
+          // --- LEITURA DOS NOVOS CAMPOS DA IA (COM PROTEÇÃO CONTRA BACKUPS ANTIGOS) ---
+          grupoTarifario: lMap['grupoTarifario'],
+          modalidadeTarifaria: lMap['modalidadeTarifaria'],
+          tarifaTeUnica: (lMap['tarifaTeUnica'] as num?)?.toDouble(),
+          tarifaTusdUnica: (lMap['tarifaTusdUnica'] as num?)?.toDouble(),
+          tarifaTePonta: (lMap['tarifaTePonta'] as num?)?.toDouble(),
+          tarifaTusdPonta: (lMap['tarifaTusdPonta'] as num?)?.toDouble(),
+          tarifaTeForaPonta: (lMap['tarifaTeForaPonta'] as num?)?.toDouble(),
+          tarifaTusdForaPonta: (lMap['tarifaTusdForaPonta'] as num?)
+              ?.toDouble(),
+          custoIluminacaoPublica: (lMap['custoIluminacaoPublica'] as num?)
+              ?.toDouble(),
+          multaReativo: (lMap['multaReativo'] as num?)?.toDouble(),
+          saldoInformadoNaFatura: (lMap['saldoInformadoNaFatura'] as num?)
+              ?.toDouble(),
+          // ----------------------------------------------------------------------------
           tenantId: userCtx['empresaId'],
           criadoPor: userCtx['uid'],
           ultimaModificacao: agora,

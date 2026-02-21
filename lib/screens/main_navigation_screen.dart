@@ -1,6 +1,6 @@
 // Caminho: lib/screens/main_navigation_screen.dart
 // Descrição: Controlador mestre (Single Page Application na Web, Navegação Híbrida).
-// ATUALIZAÇÃO: Inclusão do Cadeado de Segurança (Role Check) para áreas Admin.
+// ATUALIZAÇÃO: Correção do Cadeado de Segurança para permitir acesso de utilizadores a telas comuns.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -19,7 +19,7 @@ import '../services/dashboard_provider.dart';
 import '../utils/app_feedback.dart';
 import '../widgets/responsive_layout.dart';
 
-// Importação das Telas Admin
+// Importação das Telas Admin e Operação
 import 'admin/meu_plano_screen.dart';
 import 'admin/minha_equipe_screen.dart';
 import 'admin/historico_atividades_screen.dart';
@@ -164,7 +164,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                           .doc(inviteId)
                           .update({'status': 'recusado'});
 
-                      // CORREÇÃO: Verifica o mounted do contexto do próprio Modal (ctx)
                       if (ctx.mounted) Navigator.pop(ctx);
                     },
                     child: const Text("RECUSAR"),
@@ -275,7 +274,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
         final bool isAdmin = userData?['role'] == 'admin';
 
-        // Widget de Acesso Negado (caso o usuário tente forçar o índice via código)
+        // Widget de Acesso Negado (caso o usuário tente forçar um índice restrito)
         final acessoRestrito = Scaffold(
           backgroundColor: const Color(0xFFF5F7FA),
           body: Center(
@@ -318,20 +317,23 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 final String refreshKey =
                     "${boxUsinas.length}_${boxLancamentos.length}";
 
-                // --- MAPA DE PÁGINAS COM TRAVA DE SEGURANÇA ---
+                // --- MAPA DE PÁGINAS COM TRAVA DE SEGURANÇA CORRIGIDA ---
                 final List<Widget> pages = [
                   VisaoGeralScreen(key: ValueKey("visao_$refreshKey")), // 0
                   UsinasListScreen(key: ValueKey("list_$refreshKey")), // 1
                   AuditoriaScreen(key: ValueKey("audit_$refreshKey")), // 2
                   isAdmin ? const MeuPlanoScreen() : acessoRestrito, // 3
-                  isAdmin ? const MinhaEquipeScreen() : acessoRestrito, // 4
+                  // LIVERADO: Ambos os papéis têm acesso a essas duas telas!
+                  const MinhaEquipeScreen(), // 4
+
                   isAdmin
                       ? const HistoricoAtividadesScreen()
                       : acessoRestrito, // 5
                   isAdmin
                       ? const ConfiguracaoDadosScreen()
                       : acessoRestrito, // 6
-                  isAdmin ? const ConfiguracoesScreen() : acessoRestrito, // 7
+                  // LIBERADO: Configurações é para todos.
+                  const ConfiguracoesScreen(), // 7
                 ];
 
                 return ResponsiveLayout(

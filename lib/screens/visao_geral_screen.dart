@@ -54,36 +54,72 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
 
   // --- INTEGRAÇÃO HG BRASIL (WEB) ---
+  // --- INTEGRAÇÃO HG BRASIL (WEB) BLINDADA CONTRA CORS ---
   Future<void> _buscarClimaReal() async {
+    const String urlOriginal =
+        'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd&user_ip=remote';
+
     try {
-      final url = Uri.parse(
-        'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd&user_ip=remote',
-      );
-      final response = await http.get(url);
+      // 1. TENTA A ROTA DIRETA (Rápida e nativa. Funciona no Android e na URL principal)
+      final response = await http.get(Uri.parse(urlOriginal));
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final results = data['results'];
-
-        if (mounted) {
-          setState(() {
-            _climaData = {
-              'condicao': results['description'],
-              'temperatura': results['temp'],
-              'icone': _obterIconeHg(results['condition_slug']),
-              'cor': _obterCorHg(results['condition_slug']),
-              'cidade': results['city'],
-            };
-          });
-        }
+        _processarRespostaClima(response.body);
+      } else {
+        throw Exception("Status code não foi 200");
       }
     } catch (e) {
-      debugPrint('Erro ao buscar clima: $e');
+      debugPrint(
+        'Bloqueio de CORS na rota direta. Tentando Proxy alternativo...',
+      );
+
+      // 2. PLANO B: PROXY DE CORS
+      // (Engana a restrição do navegador para os seus outros domínios: web.app e fabianomarques.com.br)
+      try {
+        final proxyUrl = Uri.parse(
+          'https://api.allorigins.win/raw?url=${Uri.encodeComponent(urlOriginal)}',
+        );
+        final responseProxy = await http.get(proxyUrl);
+
+        if (responseProxy.statusCode == 200) {
+          _processarRespostaClima(responseProxy.body);
+        } else {
+          _definirClimaIndisponivel();
+        }
+      } catch (e2) {
+        debugPrint('Erro no Proxy: $e2');
+        _definirClimaIndisponivel();
+      }
+    }
+  }
+
+  // --- Helpers para manter o código do clima limpo ---
+  void _processarRespostaClima(String responseBody) {
+    try {
+      final data = json.decode(responseBody);
+      final results = data['results'];
+
       if (mounted) {
         setState(() {
-          _climaData['condicao'] = 'Clima indisponível';
+          _climaData = {
+            'condicao': results['description'],
+            'temperatura': results['temp'],
+            'icone': _obterIconeHg(results['condition_slug']),
+            'cor': _obterCorHg(results['condition_slug']),
+            'cidade': results['city'],
+          };
         });
       }
+    } catch (_) {
+      _definirClimaIndisponivel();
+    }
+  }
+
+  void _definirClimaIndisponivel() {
+    if (mounted) {
+      setState(() {
+        _climaData['condicao'] = 'Clima indisponível';
+      });
     }
   }
 

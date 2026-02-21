@@ -158,11 +158,8 @@ class ResponsiveLayout extends StatelessWidget {
                   : null,
               builder: (context, snapshot) {
                 // --- FALLBACK IMEDIATO ENQUANTO CARREGA ---
-                // Para não ficar o "Carregando..." bloqueando a renderização visual dos menus
                 bool isAdmin = false;
-                String nomeExibido = emailSessao
-                    .split('@')
-                    .first; // Tenta extrair o nome do email
+                String nomeExibido = emailSessao.split('@').first;
                 String cargoExibido = "Sincronizando...";
 
                 if (snapshot.hasData && snapshot.data!.exists) {
@@ -249,21 +246,29 @@ class ResponsiveLayout extends StatelessWidget {
                               onTap: () => onTabTapped(index),
                             );
                           }),
-                          if (isAdmin) ...[
-                            const SizedBox(height: 24),
-                            _buildSectionHeader('ADMINISTRAÇÃO'),
+
+                          const SizedBox(height: 24),
+                          _buildSectionHeader('ADMINISTRAÇÃO'),
+
+                          // --- APENAS ADMIN ---
+                          if (isAdmin)
                             _buildMenuItem(
                               icon: Icons.business,
                               label: 'Plano e Empresa',
                               isSelected: currentIndex == 3,
                               onTap: () => onAdminItemTap?.call(3),
                             ),
-                            _buildMenuItem(
-                              icon: Icons.group_outlined,
-                              label: 'Equipe',
-                              isSelected: currentIndex == 4,
-                              onTap: () => onAdminItemTap?.call(4),
-                            ),
+
+                          // --- TODOS VEEM (Equipe) ---
+                          _buildMenuItem(
+                            icon: Icons.group_outlined,
+                            label: 'Equipe',
+                            isSelected: currentIndex == 4,
+                            onTap: () => onAdminItemTap?.call(4),
+                          ),
+
+                          // --- APENAS ADMIN ---
+                          if (isAdmin) ...[
                             _buildMenuItem(
                               icon: Icons.history_edu,
                               label: 'Logs do Sistema',
@@ -276,13 +281,15 @@ class ResponsiveLayout extends StatelessWidget {
                               isSelected: currentIndex == 6,
                               onTap: () => onAdminItemTap?.call(6),
                             ),
-                            _buildMenuItem(
-                              icon: Icons.settings_outlined,
-                              label: 'Configurações',
-                              isSelected: currentIndex == 7,
-                              onTap: () => onAdminItemTap?.call(7),
-                            ),
                           ],
+
+                          // --- TODOS VEEM (Configurações) ---
+                          _buildMenuItem(
+                            icon: Icons.settings_outlined,
+                            label: 'Configurações',
+                            isSelected: currentIndex == 7,
+                            onTap: () => onAdminItemTap?.call(7),
+                          ),
                         ],
                       ),
                     ),

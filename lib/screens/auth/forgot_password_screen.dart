@@ -46,110 +46,163 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA), // Fundo cinza padrão do sistema
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(
-          color: Colors.deepOrange,
-        ), // Seta laranja
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: ConstrainedBox(
-            // Limite de largura para Web/Tablet
-            constraints: const BoxConstraints(maxWidth: 450),
-            child: Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.blueGrey.withValues(alpha: 0.1),
-                    blurRadius: 24,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24.0),
+            child: ConstrainedBox(
+              // Limite de largura para Web/Tablet
+              constraints: const BoxConstraints(maxWidth: 450),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(
-                    Icons.lock_reset,
-                    size: 60,
-                    color: Colors.deepOrange,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    "Recuperar Senha",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    "Digite o seu e-mail cadastrado. Enviaremos um link para você criar uma nova senha de acesso.",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey,
-                      height: 1.4,
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-
-                  TextFormField(
-                    controller: _emailController,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: InputDecoration(
-                      labelText: "E-mail",
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      prefixIcon: const Icon(Icons.email_outlined),
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-
-                  SizedBox(
-                    height: 55, // Altura padronizada
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _enviarEmail,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepOrange,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.blueGrey.withValues(alpha: 0.1),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
                         ),
-                        elevation: 0,
-                      ),
-                      child: _isLoading
-                          ? const SizedBox(
-                              height: 24,
-                              width: 24,
-                              child: CircularProgressIndicator(
-                                color: Colors.white,
-                                strokeWidth: 2,
-                              ),
-                            )
-                          : const Text(
-                              "ENVIAR E-MAIL",
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 1.0,
-                              ),
-                            ),
+                      ],
                     ),
+                    child: Stack(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(40),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // --- LOGO (Consistência Visual) ---
+                              const Icon(
+                                Icons.wb_sunny,
+                                size: 60,
+                                color: Colors.deepOrange,
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                "SolarInsight",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.deepOrange,
+                                  letterSpacing: 1.2,
+                                ),
+                              ),
+                              const SizedBox(height: 32),
+
+                              const Text(
+                                "Recuperar Senha",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              const Text(
+                                "Digite o seu e-mail cadastrado. Enviaremos um link para você criar uma nova senha de acesso.",
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.grey,
+                                  height: 1.4,
+                                ),
+                              ),
+                              const SizedBox(height: 32),
+
+                              TextFormField(
+                                controller: _emailController,
+                                keyboardType: TextInputType.emailAddress,
+                                decoration: InputDecoration(
+                                  labelText: "E-mail",
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: BorderSide(
+                                      color: Colors.grey.shade300,
+                                    ),
+                                  ),
+                                  prefixIcon: const Icon(Icons.email_outlined),
+                                ),
+                              ),
+                              const SizedBox(height: 32),
+
+                              SizedBox(
+                                height: 55, // Altura padronizada
+                                child: ElevatedButton(
+                                  onPressed: _isLoading ? null : _enviarEmail,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.deepOrange,
+                                    foregroundColor: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    elevation: 0,
+                                  ),
+                                  child: _isLoading
+                                      ? const SizedBox(
+                                          height: 24,
+                                          width: 24,
+                                          child: CircularProgressIndicator(
+                                            color: Colors.white,
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Text(
+                                          "ENVIAR E-MAIL",
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: 1.0,
+                                          ),
+                                        ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // --- BOTÃO 'X' NO CANTO SUPERIOR DIREITO ---
+                        Positioned(
+                          top: 16,
+                          right: 16,
+                          child: IconButton(
+                            icon: const Icon(Icons.close, color: Colors.grey),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ==========================================
+                  // --- RODAPÉ COM VERSÃO E AUTORIA ---
+                  // ==========================================
+                  const SizedBox(height: 32),
+                  const Column(
+                    children: [
+                      Text(
+                        "SolarInsight v1.0.0 Web/Mobile",
+                        style: TextStyle(color: Colors.grey, fontSize: 13),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        "by Fabiano Marques",
+                        style: TextStyle(
+                          color: Colors.blueGrey,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
