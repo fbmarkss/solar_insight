@@ -1,8 +1,10 @@
 // Caminho: lib/screens/importacao_ia_screen.dart
-// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO) - Integrada com Gemini.
+// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO) - Integrada com Gemini e Validação de Plano.
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/usina.dart';
 import '../services/gemini_service.dart';
 
@@ -16,8 +18,6 @@ class ImportacaoIaScreen extends StatefulWidget {
 }
 
 class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
-  final bool _isUsuarioPro = true;
-
   bool _isAnalyzing = false;
   String _statusMessage = 'Aguardando documento...';
 
@@ -32,11 +32,47 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
   ];
 
   Future<void> _selecionarEAnalisarPdf() async {
-    if (!_isUsuarioPro) {
-      _mostrarPaywall();
-      return;
+    // --- 1. VERIFICAÇÃO DE SEGURANÇA (PAYWALL REAL) ---
+    setState(() {
+      _isAnalyzing = true;
+      _statusMessage = 'Validando credenciais de acesso...';
+    });
+
+    bool usuarioPodeUsarIA = false;
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user != null) {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        final data = doc.data();
+
+        // Regra de Negócio: Admins ou usuários marcados como PRO no Firestore
+        bool isAdmin = data?['role'] == 'admin';
+        bool isPro = data?['plano'] == 'pro' || data?['isPro'] == true;
+
+        usuarioPodeUsarIA = isAdmin || isPro;
+      } catch (e) {
+        debugPrint("Erro ao verificar plano: $e");
+      }
     }
 
+    // Se não tiver permissão, aborta e mostra o painel de cobrança!
+    if (!usuarioPodeUsarIA) {
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+          _statusMessage = 'Aguardando documento...';
+        });
+        _mostrarPaywall();
+      }
+      return;
+    }
+    // --------------------------------------------------
+
+    // --- 2. SE FOR PRO/ADMIN, CONTINUA O FLUXO NORMAL ---
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf'],
@@ -44,7 +80,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
     );
 
     if (result != null) {
-      // ERRO 1 RESOLVIDO: Estamos guardando o arquivo para usar seus bytes.
       PlatformFile file = result.files.first;
 
       setState(() {
@@ -71,7 +106,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
         _mostrarSucesso('Fatura lida com sucesso! Redirecionando...');
 
         Future.delayed(const Duration(seconds: 2), () {
-          // ERRO 3 RESOLVIDO: Uso correto das chaves { } em estruturas de controle de fluxo.
           if (mounted) {
             Navigator.pop(context, dadosExtraidos);
           }
@@ -81,6 +115,12 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
           'Não foi possível ler esta fatura. Verifique se o PDF é válido e tente novamente.',
         );
       }
+    } else {
+      // Caso o usuário cancele a seleção do arquivo
+      setState(() {
+        _isAnalyzing = false;
+        _statusMessage = 'Aguardando documento...';
+      });
     }
   }
 
@@ -121,6 +161,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
+              // FUTURO: Navegar para a tela de Assinatura/Planos aqui
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.amber.shade700,
@@ -270,7 +311,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'A inteligência artificial está operando...',
+                          'Aguarde um instante...',
                           style: TextStyle(color: Colors.grey, fontSize: 12),
                         ),
                       ] else ...[
