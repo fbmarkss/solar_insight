@@ -12,12 +12,10 @@ class ResponsiveLayout extends StatelessWidget {
   final List<String> titulos;
   final List<IconData> icones;
 
-  // Parâmetros Mobile
   final PreferredSizeWidget? mobileAppBar;
   final Widget? mobileDrawer;
   final Widget? mobileFab;
 
-  // Callbacks Web
   final VoidCallback? onSyncTap;
   final Function(int)? onAdminItemTap;
 
@@ -39,11 +37,9 @@ class ResponsiveLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Breakpoint para Sidebar
         bool isDesktop = constraints.maxWidth >= 900;
 
         if (!isDesktop) {
-          // --- MOBILE (Layout de Lista Original) ---
           int mobileIndex = currentIndex > 2 ? 0 : currentIndex;
 
           return Scaffold(
@@ -67,7 +63,6 @@ class ResponsiveLayout extends StatelessWidget {
             ),
           );
         } else {
-          // --- WEB DESKTOP (Fixado em 1200px) ---
           return Scaffold(
             backgroundColor: const Color(0xFFF0F2F5),
             body: Row(
@@ -78,7 +73,6 @@ class ResponsiveLayout extends StatelessWidget {
                   child: Container(
                     alignment: Alignment.topCenter,
                     child: ConstrainedBox(
-                      // AJUSTE SOLICITADO: Trava o tamanho máximo em 1200
                       constraints: const BoxConstraints(maxWidth: 1200),
                       child: pages[currentIndex],
                     ),
@@ -93,11 +87,15 @@ class ResponsiveLayout extends StatelessWidget {
     );
   }
 
-  // --- COMPONENTES DA SIDEBAR (MANTIDOS E ATUALIZADOS) ---
-
   Widget _buildWebSidebar(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     final bool isLogado = user != null;
+
+    // --- ESTADO INICIAL (Imediato da Sessão) ---
+    final String emailSessao = user?.email ?? "Usuário";
+    final String letraBase = emailSessao.isNotEmpty
+        ? emailSessao[0].toUpperCase()
+        : "U";
 
     return Container(
       width: 250,
@@ -107,9 +105,6 @@ class ResponsiveLayout extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // =========================================================
-          // LOGO E TÍTULO (Com Degradê Azul)
-          // =========================================================
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 32),
@@ -118,7 +113,7 @@ class ResponsiveLayout extends StatelessWidget {
                 colors: [
                   const Color.fromARGB(255, 6, 153, 252),
                   const Color.fromARGB(255, 162, 213, 243),
-                ], // Degradê Azul
+                ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -129,17 +124,13 @@ class ResponsiveLayout extends StatelessWidget {
                 SizedBox(
                   height: 120,
                   width: 120,
-                  // O ClipRRect vai "barbear" a borda serrilhada/laranja externa
                   child: ClipRRect(
-                    // Se o seu arredondamento original for maior, pode aumentar este valor
                     borderRadius: BorderRadius.circular(24),
                     child: Image.asset(
                       'assets/logoweb.png',
-                      fit: BoxFit
-                          .cover, // Preenche o espaço cortando a aresta defeituosa
-                      filterQuality: FilterQuality
-                          .high, // Força a melhor qualidade de redução
-                      isAntiAlias: true, // Suaviza as bordas na Web
+                      fit: BoxFit.cover,
+                      filterQuality: FilterQuality.high,
+                      isAntiAlias: true,
                     ),
                   ),
                 ),
@@ -149,18 +140,14 @@ class ResponsiveLayout extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w900,
-                    color: Colors
-                        .white, // Fonte branca para destacar no fundo azul
+                    color: Colors.white,
                     letterSpacing: 0.5,
                   ),
                 ),
               ],
             ),
           ),
-          // =========================================================
-          // =========================================================
 
-          // --- AREA PROTEGIDA POR PERFIL (CABEÇALHO + MENUS) ---
           Expanded(
             child: FutureBuilder<DocumentSnapshot>(
               future: isLogado
@@ -170,32 +157,31 @@ class ResponsiveLayout extends StatelessWidget {
                         .get()
                   : null,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: Colors.deepOrange),
-                  );
+                // --- FALLBACK IMEDIATO ENQUANTO CARREGA ---
+                // Para não ficar o "Carregando..." bloqueando a renderização visual dos menus
+                bool isAdmin = false;
+                String nomeExibido = emailSessao
+                    .split('@')
+                    .first; // Tenta extrair o nome do email
+                String cargoExibido = "Sincronizando...";
+
+                if (snapshot.hasData && snapshot.data!.exists) {
+                  final userData =
+                      snapshot.data!.data() as Map<String, dynamic>?;
+                  isAdmin = userData?['role'] == 'admin';
+
+                  final String nomeEmpresa = userData?['nomeEmpresa'] ?? "";
+                  final String nomeFirestore = userData?['nome'] ?? nomeExibido;
+
+                  nomeExibido = nomeEmpresa.isNotEmpty
+                      ? "$nomeFirestore | $nomeEmpresa"
+                      : nomeFirestore;
+
+                  cargoExibido = isAdmin ? "Administrador" : "Usuário";
                 }
-
-                final userData = snapshot.data?.data() as Map<String, dynamic>?;
-
-                // A CHAVE DO CADEADO PARA OS MENUS:
-                final bool isAdmin = userData?['role'] == 'admin';
-
-                final String nomeEmpresa = userData?['nomeEmpresa'] ?? "";
-                final String nomeUsuarioFirestore =
-                    userData?['nome'] ?? "Carregando...";
-
-                final String cargo = isAdmin ? "Administrador" : "Usuário";
-
-                final letraInicial =
-                    nomeUsuarioFirestore.isNotEmpty &&
-                        nomeUsuarioFirestore != "Carregando..."
-                    ? nomeUsuarioFirestore[0].toUpperCase()
-                    : "U";
 
                 return Column(
                   children: [
-                    // --- 1. CABEÇALHO DO UTILIZADOR ---
                     Container(
                       margin: const EdgeInsets.symmetric(
                         horizontal: 12,
@@ -212,7 +198,7 @@ class ResponsiveLayout extends StatelessWidget {
                             backgroundColor: Colors.white,
                             radius: 16,
                             child: Text(
-                              letraInicial,
+                              letraBase,
                               style: const TextStyle(
                                 color: Colors.deepOrange,
                                 fontWeight: FontWeight.bold,
@@ -226,9 +212,7 @@ class ResponsiveLayout extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  nomeEmpresa.isNotEmpty
-                                      ? "$nomeUsuarioFirestore | $nomeEmpresa"
-                                      : nomeUsuarioFirestore,
+                                  nomeExibido,
                                   style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                     fontSize: 13,
@@ -238,7 +222,7 @@ class ResponsiveLayout extends StatelessWidget {
                                   maxLines: 1,
                                 ),
                                 Text(
-                                  cargo,
+                                  cargoExibido,
                                   style: TextStyle(
                                     color: Colors.grey.shade600,
                                     fontSize: 11,
@@ -251,10 +235,7 @@ class ResponsiveLayout extends StatelessWidget {
                         ],
                       ),
                     ),
-
                     const SizedBox(height: 16),
-
-                    // --- 2. MENUS DE NAVEGAÇÃO ---
                     Expanded(
                       child: ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -268,10 +249,6 @@ class ResponsiveLayout extends StatelessWidget {
                               onTap: () => onTabTapped(index),
                             );
                           }),
-
-                          // ==========================================================
-                          // CADEADO: Só renderiza se for Administrador!
-                          // ==========================================================
                           if (isAdmin) ...[
                             const SizedBox(height: 24),
                             _buildSectionHeader('ADMINISTRAÇÃO'),
@@ -306,7 +283,6 @@ class ResponsiveLayout extends StatelessWidget {
                               onTap: () => onAdminItemTap?.call(7),
                             ),
                           ],
-                          // ==========================================================
                         ],
                       ),
                     ),
@@ -315,10 +291,7 @@ class ResponsiveLayout extends StatelessWidget {
               },
             ),
           ),
-
           const Divider(height: 1),
-
-          // --- Rodapé (Sincronizar e Sair) SEMPRE VISÍVEL ---
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(

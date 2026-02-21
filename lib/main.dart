@@ -29,16 +29,17 @@ void main() async {
   await dotenv.load(fileName: ".env");
 
   // 2. Inicializa Firebase com Opções (CRUCIAL PARA WEB)
-  // O DefaultFirebaseOptions detecta se está no Android, iOS ou Web e entrega a chave certa.
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // --- FORÇA PERSISTÊNCIA DO LOGIN NA WEB PARA EVITAR O "CARREGANDO" INFINITO ---
+  if (kIsWeb) {
+    await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+  }
 
   // 3. Inicializa Hive (Lógica Híbrida Web/Mobile)
   if (kIsWeb) {
-    // Na Web, o Hive usa o IndexedDB do navegador automaticamente.
-    // Não podemos passar "path" aqui, senão dá erro.
     await Hive.initFlutter();
   } else {
-    // No Celular, precisamos definir o diretório de documentos.
     final appDocumentDir = await getApplicationDocumentsDirectory();
     await Hive.initFlutter(appDocumentDir.path);
   }
@@ -52,7 +53,6 @@ void main() async {
   Hive.registerAdapter(BeneficiariaItemAdapter());
 
   // 4. Abre as Boxes
-  // Abrimos todas as caixas necessárias para o app não travar tentando acessar uma fechada.
   await Hive.openBox<Usina>('usinas');
   await Hive.openBox<LancamentoMensal>('lancamentos');
   await Hive.openBox('sync_queue'); // Fila de sincronização
@@ -80,7 +80,6 @@ class SolarInsightApp extends StatelessWidget {
     return MaterialApp(
       title: 'SolarInsight',
       debugShowCheckedModeBanner: false,
-      // Força o idioma para PT-BR
       locale: const Locale('pt', 'BR'),
       theme: ThemeData(
         useMaterial3: true,
