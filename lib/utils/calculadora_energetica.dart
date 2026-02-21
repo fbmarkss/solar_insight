@@ -1,5 +1,5 @@
 // Caminho: lib/utils/calculadora_energetica.dart
-// Descrição: Motor de cálculo energético (Com Lógica de Inversor, Custo de Disponibilidade, Conciliação de Saldo, Injeção Líquida e Otimização de Rateio).
+// Descrição: Motor de cálculo energético (Com Inteligência Tarifária, TE/TUSD, Auditoria de Fio B, Alertas de Multa e Auditor de Desvio de Créditos).
 
 import 'package:hive/hive.dart';
 import '../models/usina.dart';
@@ -9,10 +9,14 @@ import '../models/lancamento.dart';
 
 class MetricasGerais {
   final double totalGeradoKwh;
-  final double
-  totalInjetadoKwh; // Para geradora é o Bruto, para Beneficiária é o Recebido
+  final double totalInjetadoKwh;
   final double totalAutoconsumoKwh;
   final double valorTotalEconomizadoR;
+  // --- NOVOS CAMPOS AUDITORIA PRO ---
+  final double custoFixoInevitavelR; // Demanda + Iluminação Pública
+  final double totalMultasReativoR; // Dinheiro jogado no lixo
+  final double totalCreditosDesviados; // O Placar do Prejuízo!
+  // ----------------------------------
   final double percentualRoi;
   final double mediaGeracao3Meses;
   final double mediaConsumo3Meses;
@@ -23,6 +27,9 @@ class MetricasGerais {
     required this.totalInjetadoKwh,
     required this.totalAutoconsumoKwh,
     required this.valorTotalEconomizadoR,
+    required this.custoFixoInevitavelR,
+    required this.totalMultasReativoR,
+    required this.totalCreditosDesviados,
     required this.percentualRoi,
     required this.mediaGeracao3Meses,
     required this.mediaConsumo3Meses,
@@ -65,24 +72,67 @@ class CalculadoraEnergetica {
   // MÉTODOS AUXILIARES
   // ===========================================================================
 
-  /// Identifica a taxa de disponibilidade (Custo mínimo que NÃO pode ser abatido por créditos)
   static double _obterCustoDisponibilidade(Usina usina) {
     String t = usina.tipo.toLowerCase();
-    if (t.contains('monof')) return 30.0;
-    if (t.contains('bif')) return 50.0;
-    // Padrão assumido como trifásico (100 kWh intocáveis)
+    if (t.contains('monof')) {
+      return 30.0;
+    }
+    if (t.contains('bif')) {
+      return 50.0;
+    }
     return 100.0;
   }
 
+  // --- HELPER CENTRALIZADO PARA EVITAR REPETIÇÃO DE CÓDIGO ---
+  static double _calcularCreditoRecebidoLiquido(
+    Usina usina,
+    LancamentoMensal l,
+  ) {
+    if (usina.isGeradora) {
+      double percentualEnviado = usina.beneficiarias.fold(
+        0.0,
+        (sum, b) => sum + b.percentual,
+      );
+      double energiaEnviada = l.energiaInjetadaKwh * (percentualEnviado / 100);
+      return l.energiaInjetadaKwh - energiaEnviada;
+    } else {
+      double recebido = l.energiaInjetadaKwh;
+      if (recebido == 0) {
+        final boxUsinas = Hive.box<Usina>('usinas');
+        final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
+        final maes = boxUsinas.values.where(
+          (u) =>
+              u.isGeradora &&
+              u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
+        );
+        for (var mae in maes) {
+          try {
+            var vinculo = mae.beneficiarias.firstWhere(
+              (b) => b.idUsinaFilha == usina.id,
+            );
+            var lancMae = boxLancamentos.values.firstWhere(
+              (lm) =>
+                  lm.usinaId == mae.id &&
+                  lm.dataReferencia.year == l.dataReferencia.year &&
+                  lm.dataReferencia.month == l.dataReferencia.month &&
+                  !lm.isDeletado,
+            );
+            recebido +=
+                (lancMae.energiaInjetadaKwh * (vinculo.percentual / 100));
+          } catch (_) {}
+        }
+      }
+      return recebido;
+    }
+  }
+
   // ===========================================================================
-  // 0. CÁLCULO DE POTÊNCIA EFETIVA (Inversor vs Painéis)
+  // 0. CÁLCULO DE POTÊNCIA EFETIVA
   // ===========================================================================
   static double calcularPotenciaEfetiva(Usina usina) {
-    // 1. Potência dos Painéis (DC - O "Motor")
     double potenciaPaineisDc = usina.potenciaTotalPaineisKwp;
-
-    // 2. Potência dos Inversores (AC - O "Gargalo")
     double potenciaInversoresAc = 0;
+
     if (usina.inversores.isNotEmpty) {
       potenciaInversoresAc = usina.inversores.fold(
         0.0,
@@ -90,9 +140,10 @@ class CalculadoraEnergetica {
       );
     }
 
-    if (potenciaInversoresAc == 0) return potenciaPaineisDc;
+    if (potenciaInversoresAc == 0) {
+      return potenciaPaineisDc;
+    }
 
-    // 3. Lógica de Overloading (Fator de Dimensionamento)
     if (potenciaPaineisDc <= potenciaInversoresAc) {
       return potenciaPaineisDc;
     } else {
@@ -104,59 +155,58 @@ class CalculadoraEnergetica {
   }
 
   // ===========================================================================
-  // 1. CÁLCULO MACRO (DASHBOARD / VIDA ÚTIL)
+  // 1. CÁLCULO MACRO (DASHBOARD / VIDA ÚTIL) - COM INTELIGÊNCIA IA
   // ===========================================================================
   static MetricasGerais calcularMetricasGerais(
     Usina usina,
     List<LancamentoMensal> historico,
   ) {
-    // Ordenação cronológica para o saldo acumulado (Rolling Balance) funcionar e calibrar
     historico.sort((a, b) => a.dataReferencia.compareTo(b.dataReferencia));
 
     double somaGeracao = 0;
-    double somaInjetadaHistorico =
-        0; // Serve para "Total Exportado" ou "Total Recebido"
+    double somaInjetadaHistorico = 0;
     double somaEconomiaReais = 0;
     double saldoRollingKwh = 0;
 
-    final boxUsinas = Hive.box<Usina>('usinas');
-    final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
+    // Novas somas financeiras
+    double somaCustosFixos = 0;
+    double somaMultas = 0;
+    double somaDesviosConcessionaria = 0;
 
-    // Taxa Mínima que não pode ser abatida com créditos
     double custoDisponibilidade = _obterCustoDisponibilidade(usina);
 
-    // Identifica as usinas mães (Se for beneficiária)
-    List<Usina> geradorasMaes = [];
-    if (!usina.isGeradora) {
-      geradorasMaes = boxUsinas.values
-          .where(
-            (u) =>
-                u.isGeradora &&
-                u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
-          )
-          .toList();
-    }
-
     for (var l in historico) {
-      double entradaCreditoMesParaSaldo = 0; // O que vai pra "carteira"
-      double injecaoBrutaParaExibicao = 0; // O que vai pro placar visual
+      double entradaCreditoMesParaSaldo = _calcularCreditoRecebidoLiquido(
+        usina,
+        l,
+      );
       double consumoMes = l.energiaConsumidaRedeKwh;
 
+      // --- INTELIGÊNCIA TARIFÁRIA (O FIM DA TARIFA MÉDIA) ---
+      double tarifaInteligente = l.tarifaKwh;
+
+      if (l.grupoTarifario == 'A' ||
+          l.modalidadeTarifaria == 'VERDE' ||
+          l.modalidadeTarifaria == 'AZUL') {
+        if ((l.tarifaTeForaPonta ?? 0) > 0) {
+          tarifaInteligente =
+              l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
+        }
+      } else {
+        if ((l.tarifaTeUnica ?? 0) > 0) {
+          tarifaInteligente = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
+        }
+      }
+      if (tarifaInteligente <= 0) {
+        tarifaInteligente = l.tarifaKwh;
+      }
+
+      somaCustosFixos += l.custoDemandaR + (l.custoIluminacaoPublica ?? 0.0);
+      somaMultas += (l.multaReativo ?? 0.0);
+
       if (usina.isGeradora) {
-        // --- CASO GERADORA ---
         somaGeracao += l.geracaoTotalKwh;
-        injecaoBrutaParaExibicao = l.energiaInjetadaKwh;
-
-        // FASE 1: O Pagamento dos Herdeiros (Desconto do Rateio)
-        double percentualTotalEnviado = usina.beneficiarias.fold(
-          0.0,
-          (sum, b) => sum + b.percentual,
-        );
-        double energiaEnviada =
-            injecaoBrutaParaExibicao * (percentualTotalEnviado / 100);
-
-        // A Injeção Líquida é o que efetivamente fica na Geradora
-        entradaCreditoMesParaSaldo = injecaoBrutaParaExibicao - energiaEnviada;
+        somaInjetadaHistorico += l.energiaInjetadaKwh;
 
         double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
           0,
@@ -165,65 +215,49 @@ class CalculadoraEnergetica {
         double consumoTotalReal = autoconsumo + l.energiaConsumidaRedeKwh;
 
         double custoSemSolar =
-            (consumoTotalReal * l.tarifaKwh) + l.custoDemandaR;
+            (consumoTotalReal * tarifaInteligente) +
+            l.custoDemandaR +
+            (l.custoIluminacaoPublica ?? 0.0) +
+            (l.multaReativo ?? 0.0);
         somaEconomiaReais += (custoSemSolar - l.valorFaturaR).clamp(
           0,
           double.infinity,
         );
       } else {
-        // --- CASO BENEFICIÁRIA ---
-        // Prioridade 1: O que o usuário digitou manualmente na fatura (Salvo no campo Injetada)
-        entradaCreditoMesParaSaldo = l.energiaInjetadaKwh;
-
-        // Prioridade 2: Fallback Inteligente (Se ele deixou 0, o app calcula a teoria)
-        if (entradaCreditoMesParaSaldo == 0) {
-          for (var mae in geradorasMaes) {
-            try {
-              var vinculo = mae.beneficiarias.firstWhere(
-                (b) => b.idUsinaFilha == usina.id,
-              );
-              var lancMae = boxLancamentos.values.firstWhere(
-                (lm) =>
-                    lm.usinaId == mae.id &&
-                    lm.dataReferencia.year == l.dataReferencia.year &&
-                    lm.dataReferencia.month == l.dataReferencia.month &&
-                    !lm.isDeletado,
-              );
-              entradaCreditoMesParaSaldo +=
-                  (lancMae.energiaInjetadaKwh * (vinculo.percentual / 100));
-            } catch (_) {}
-          }
-        }
-
-        injecaoBrutaParaExibicao = entradaCreditoMesParaSaldo;
+        somaInjetadaHistorico += entradaCreditoMesParaSaldo;
 
         double custoSemSolar =
-            (l.energiaConsumidaRedeKwh * l.tarifaKwh) + l.custoDemandaR;
+            (l.energiaConsumidaRedeKwh * tarifaInteligente) +
+            l.custoDemandaR +
+            (l.custoIluminacaoPublica ?? 0.0) +
+            (l.multaReativo ?? 0.0);
         somaEconomiaReais += (custoSemSolar - l.valorFaturaR).clamp(
           0,
           double.infinity,
         );
       }
 
-      somaInjetadaHistorico += injecaoBrutaParaExibicao;
-
-      // --- CÁLCULO: REGRA DO CUSTO DE DISPONIBILIDADE ---
       double consumoAbativel = consumoMes > custoDisponibilidade
           ? consumoMes - custoDisponibilidade
           : 0.0;
 
-      // Saldo Acumulado Contábil (Usa a entrada líquida)
       saldoRollingKwh += (entradaCreditoMesParaSaldo - consumoAbativel);
-      if (saldoRollingKwh < 0) saldoRollingKwh = 0;
+      if (saldoRollingKwh < 0) {
+        saldoRollingKwh = 0;
+      }
 
-      // --- CONCILIAÇÃO BANCÁRIA DE SALDO ---
-      // A "Verdade" da fatura da concessionária sempre vence a matemática virtual.
+      // --- A AUDITORIA HISTÓRICA DE DESVIO OCORRE AQUI ---
       if (l.saldoInformadoNaFatura != null) {
+        double diferenca = saldoRollingKwh - l.saldoInformadoNaFatura!;
+        if (diferenca > 5.0) {
+          // Tolerância de arredondamento
+          somaDesviosConcessionaria += diferenca;
+        }
+        // Após flagrar o erro, o app calibra com a "verdade" da conta para não propagar o erro
         saldoRollingKwh = l.saldoInformadoNaFatura!;
       }
     }
 
-    // Médias (3 meses)
     double mediaGer = 0;
     double mediaCons = 0;
     if (historico.isNotEmpty) {
@@ -246,6 +280,9 @@ class CalculadoraEnergetica {
         double.infinity,
       ),
       valorTotalEconomizadoR: somaEconomiaReais,
+      custoFixoInevitavelR: somaCustosFixos,
+      totalMultasReativoR: somaMultas,
+      totalCreditosDesviados: somaDesviosConcessionaria,
       percentualRoi: usina.totalInvestido > 0
           ? (somaEconomiaReais / usina.totalInvestido) * 100
           : 0,
@@ -253,6 +290,38 @@ class CalculadoraEnergetica {
       mediaConsumo3Meses: mediaCons,
       saldoCreditosEstimado: saldoRollingKwh,
     );
+  }
+
+  // ===========================================================================
+  // 1.5 O AUDITOR INDIVIDUAL DE MÊS A MÊS (Para colocar selos na UI)
+  // ===========================================================================
+  static double calcularDesvioDoMes(
+    Usina usina,
+    LancamentoMensal atual,
+    LancamentoMensal? anterior,
+  ) {
+    if (atual.saldoInformadoNaFatura == null) {
+      return 0.0;
+    }
+    if (anterior == null || anterior.saldoInformadoNaFatura == null) {
+      return 0.0;
+    }
+
+    double recebido = _calcularCreditoRecebidoLiquido(usina, atual);
+    double taxaMinima = _obterCustoDisponibilidade(usina);
+    double consumoAbativel = atual.energiaConsumidaRedeKwh > taxaMinima
+        ? atual.energiaConsumidaRedeKwh - taxaMinima
+        : 0.0;
+
+    double saldoMensalGerado = recebido - consumoAbativel;
+    double saldoEsperado = anterior.saldoInformadoNaFatura! + saldoMensalGerado;
+
+    if (saldoEsperado < 0) {
+      saldoEsperado = 0;
+    }
+
+    double desvio = saldoEsperado - atual.saldoInformadoNaFatura!;
+    return desvio > 5.0 ? desvio : 0.0;
   }
 
   // ===========================================================================
@@ -347,7 +416,7 @@ class CalculadoraEnergetica {
   }
 
   // ===========================================================================
-  // 3. ALERTAS DE GESTÃO
+  // 3. ALERTAS DE GESTÃO - EVOLUÇÃO PRO (Multas, Perdas e Auditoria de Saldo)
   // ===========================================================================
   static List<Map<String, dynamic>> gerarAlertasDeGestao(
     Usina usina,
@@ -355,16 +424,44 @@ class CalculadoraEnergetica {
     double saldoCreditosGlobal,
   ) {
     List<Map<String, dynamic>> alertas = [];
-    if (ultimo == null) return alertas;
+    if (ultimo == null) {
+      return alertas;
+    }
+
+    // --- ALERTA PRO 1: MULTA DE ENERGIA REATIVA ---
+    if ((ultimo.multaReativo ?? 0) > 0) {
+      alertas.add({
+        'tipo': 'fuga_dinheiro',
+        'titulo': 'Fuga de Dinheiro (Multa)!',
+        'mensagem':
+            'A unidade ${usina.nome} pagou R\$ ${ultimo.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa (ERE/DRE). Peça a um eletricista para avaliar o Banco de Capacitores.',
+        'cor': 'red',
+        'icone': 'bolt',
+      });
+    }
+
+    // --- ALERTA PRO 2: ALTO CUSTO DE DEMANDA / FIXO ---
+    double custosFixos =
+        ultimo.custoDemandaR + (ultimo.custoIluminacaoPublica ?? 0);
+    if (ultimo.valorFaturaR > 0 && (custosFixos / ultimo.valorFaturaR) > 0.6) {
+      alertas.add({
+        'tipo': 'custo_fixo_alto',
+        'titulo': 'Custos Fixos Elevados',
+        'mensagem':
+            'Mais de 60% da sua fatura em ${usina.nome} é composta por Demanda ou Taxas. A energia solar não abate estes custos.',
+        'cor': 'orange',
+        'icone': 'domain',
+      });
+    }
+
+    final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
+    final historico =
+        boxLanc.values
+            .where((l) => l.usinaId == usina.id && !l.isDeletado)
+            .toList()
+          ..sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
 
     if (usina.isGeradora) {
-      final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
-      final historico =
-          boxLanc.values
-              .where((l) => l.usinaId == usina.id && !l.isDeletado)
-              .toList()
-            ..sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
-
       if (historico.length >= 2) {
         double geracaoAtual = ultimo.geracaoTotalKwh;
         var anteriores = historico.skip(1).take(3).toList();
@@ -385,52 +482,23 @@ class CalculadoraEnergetica {
       }
     }
 
-    double creditoRecebidoNoMes = 0;
-    if (usina.isGeradora) {
-      double percentualTotalEnviado = usina.beneficiarias.fold(
-        0.0,
-        (sum, b) => sum + b.percentual,
-      );
-      double energiaEnviada =
-          ultimo.energiaInjetadaKwh * (percentualTotalEnviado / 100);
-      creditoRecebidoNoMes = ultimo.energiaInjetadaKwh - energiaEnviada;
-    } else {
-      creditoRecebidoNoMes = ultimo.energiaInjetadaKwh;
-
-      if (creditoRecebidoNoMes == 0) {
-        final boxUsinas = Hive.box<Usina>('usinas');
-        final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
-        final maes = boxUsinas.values.where(
-          (u) =>
-              u.isGeradora &&
-              u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
-        );
-
-        for (var mae in maes) {
-          try {
-            final vinculo = mae.beneficiarias.firstWhere(
-              (b) => b.idUsinaFilha == usina.id,
-            );
-            final lancMae = boxLanc.values.firstWhere(
-              (lm) =>
-                  lm.usinaId == mae.id &&
-                  lm.dataReferencia.year == ultimo.dataReferencia.year &&
-                  lm.dataReferencia.month == ultimo.dataReferencia.month &&
-                  !lm.isDeletado,
-            );
-            creditoRecebidoNoMes +=
-                (lancMae.energiaInjetadaKwh * (vinculo.percentual / 100));
-          } catch (_) {}
-        }
-      }
-    }
-
+    double creditoRecebidoNoMes = _calcularCreditoRecebidoLiquido(
+      usina,
+      ultimo,
+    );
     double consumo = ultimo.energiaConsumidaRedeKwh;
-    double saldoMensal = creditoRecebidoNoMes - consumo;
+
+    // Calcula o que a Concessionária reteve
+    double taxaMinima = _obterCustoDisponibilidade(usina);
+    double consumoAbativel = consumo > taxaMinima ? consumo - taxaMinima : 0.0;
+
+    double saldoMensal = creditoRecebidoNoMes - consumoAbativel;
 
     if (saldoMensal < 0) {
       double deficit = saldoMensal.abs();
-      if (saldoCreditosGlobal >= deficit) {
+      // O global já conta com a subtração do mês atual que a MetricasGerais fez
+      if (saldoCreditosGlobal + deficit >= deficit) {
+        // Verifica se havia saldo antes do desconto
         alertas.add({
           'tipo': 'consumo_reserva',
           'titulo': 'Consumindo Reserva',
@@ -448,6 +516,37 @@ class CalculadoraEnergetica {
           'cor': 'red',
           'icone': 'monetization_on',
         });
+      }
+    }
+
+    // --- ALERTA PRO 3: O AUDITOR IMPLACÁVEL DE CRÉDITOS ---
+    if (historico.length >= 2 && ultimo.saldoInformadoNaFatura != null) {
+      final mesAnterior = historico[1]; // O penúltimo da lista
+
+      if (mesAnterior.saldoInformadoNaFatura != null) {
+        double saldoAnterior = mesAnterior.saldoInformadoNaFatura!;
+
+        // A matemática física do que aconteceu neste mês:
+        double saldoMatematicoEsperado = saldoAnterior + saldoMensal;
+
+        if (saldoMatematicoEsperado < 0) {
+          saldoMatematicoEsperado = 0;
+        }
+
+        double saldoLidoNaFaturaAtual = ultimo.saldoInformadoNaFatura!;
+
+        if (saldoMatematicoEsperado - saldoLidoNaFaturaAtual > 5.0) {
+          double creditosDesviados =
+              saldoMatematicoEsperado - saldoLidoNaFaturaAtual;
+          alertas.add({
+            'tipo': 'creditos_desviados',
+            'titulo': '🚨 ALERTA: Créditos Desviados!',
+            'mensagem':
+                'Auditoria Falhou: No mês passado você tinha ${saldoAnterior.toStringAsFixed(0)} kWh. Neste mês o seu saldo (sobra menos consumo) foi de ${(saldoMensal > 0 ? "+" : "")}${saldoMensal.toStringAsFixed(0)} kWh. \n\nO seu saldo correto deveria ser ${saldoMatematicoEsperado.toStringAsFixed(0)} kWh, mas a concessionária computou apenas ${saldoLidoNaFaturaAtual.toStringAsFixed(0)} kWh. Faltam ${creditosDesviados.toStringAsFixed(0)} kWh. Conteste a sua fatura!',
+            'cor': 'red',
+            'icone': 'policy',
+          });
+        }
       }
     }
 
@@ -491,13 +590,13 @@ class CalculadoraEnergetica {
   // ===========================================================================
   // 5. HELPERS DE AUDITORIA
   // ===========================================================================
-
   static double obterTotalDistribuidoNoMes(
     Usina geradora,
     LancamentoMensal lancamentoMae,
   ) {
-    if (!geradora.isGeradora || geradora.beneficiarias.isEmpty) return 0.0;
-
+    if (!geradora.isGeradora || geradora.beneficiarias.isEmpty) {
+      return 0.0;
+    }
     double percentualTotalEnviado = geradora.beneficiarias.fold(
       0.0,
       (sum, b) => sum + b.percentual,
@@ -510,7 +609,9 @@ class CalculadoraEnergetica {
     LancamentoMensal lancamentoMae,
     String idUsinaFilha,
   ) {
-    if (!geradora.isGeradora) return 0.0;
+    if (!geradora.isGeradora) {
+      return 0.0;
+    }
     try {
       final vinculo = geradora.beneficiarias.firstWhere(
         (b) => b.idUsinaFilha == idUsinaFilha,
@@ -524,22 +625,18 @@ class CalculadoraEnergetica {
   // ===========================================================================
   // 6. MOTOR DE OTIMIZAÇÃO (O "DINHEIRO NA MESA")
   // ===========================================================================
-
-  /// Analisa a carteira inteira para encontrar Beneficiárias pagando conta enquanto a Mãe tem saldo sobrando.
   static List<Map<String, dynamic>> gerarAlertaDeOtimizacaoDeRateio() {
     List<Map<String, dynamic>> alertasGerais = [];
 
     final boxUsinas = Hive.box<Usina>('usinas');
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
 
-    // Pega todas as usinas ativas
     final todasUsinas = boxUsinas.values
         .where((u) => u.ativa && !u.isDeletado)
         .toList();
     final beneficiarias = todasUsinas.where((u) => !u.isGeradora).toList();
     final geradoras = todasUsinas.where((u) => u.isGeradora).toList();
 
-    // Calcula o saldo atualizado de cada Mãe para não sugerir rateio de quem tá zerado
     Map<String, double> saldoDasMaes = {};
     for (var mae in geradoras) {
       var lancamentosMae = boxLancamentos.values
@@ -554,38 +651,32 @@ class CalculadoraEnergetica {
           .where((l) => l.usinaId == filha.id && !l.isDeletado)
           .toList();
 
-      // Só analisa se a filha tiver histórico
       if (lancamentosFilha.isNotEmpty) {
         lancamentosFilha.sort(
           (a, b) => b.dataReferencia.compareTo(a.dataReferencia),
         );
         var ultimoLancamento = lancamentosFilha.first;
 
-        // Aplica a regra de disponibilidade
         double taxaMinima = _obterCustoDisponibilidade(filha);
         double consumoAbativel =
             ultimoLancamento.energiaConsumidaRedeKwh > taxaMinima
             ? ultimoLancamento.energiaConsumidaRedeKwh - taxaMinima
             : 0.0;
 
-        // Calcula quanto faltou no mês para cobrir a conta (Déficit Real)
         double deficitDoMes =
             consumoAbativel - ultimoLancamento.energiaInjetadaKwh;
 
-        // Se faltou energia e a filha pagou conta do bolso...
         if (deficitDoMes > 0) {
-          // O app procura quem é a Mãe dessa filha
           for (var mae in geradoras) {
             if (mae.beneficiarias.any((b) => b.idUsinaFilha == filha.id)) {
-              // A Mãe tem saldo sobrando?
               if (saldoDasMaes[mae.id] != null &&
                   saldoDasMaes[mae.id]! > deficitDoMes) {
                 alertasGerais.add({
                   'tipo': 'otimizacao_rateio',
                   'titulo': 'Oportunidade de Economia!',
                   'mensagem':
-                      'A unidade **${filha.nome}** pagou conta este mês (faltou energia), enquanto a usina **${mae.nome}** tem saldo acumulado sobrando. \n\nRecomendação: Considere ligar para a concessionária e aumentar o % de rateio para a ${filha.nome}!',
-                  'cor': 'green', // Destaque para economia
+                      'A unidade **${filha.nome}** pagou conta este mês, enquanto a usina **${mae.nome}** tem saldo sobrando.\nRecomendação: Aumente o % de rateio para a ${filha.nome}!',
+                  'cor': 'green',
                   'icone': 'lightbulb_circle',
                 });
               }

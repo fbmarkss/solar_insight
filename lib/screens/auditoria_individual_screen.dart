@@ -1,5 +1,5 @@
 // Caminho: lib/screens/auditoria_individual_screen.dart
-// Descrição: Tela de Auditoria Anual com layout de fluxo de abatimento (Consumo vs Créditos).
+// Descrição: Tela de Auditoria Anual com uso de Dados Reais e Alerta de Retenção da Concessionária.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -36,7 +36,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         valueListenable: Hive.box<LancamentoMensal>('lancamentos').listenable(),
         builder: (context, Box<LancamentoMensal> box, _) {
           final lancamentos = box.values
-              .where((l) => l.usinaId == usina.id)
+              .where((l) => l.usinaId == usina.id && !l.isDeletado)
               .toList();
 
           lancamentos.sort(
@@ -80,7 +80,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               _buildResumoCard(metricas, lancamentos.length),
-              _buildFluxoCreditosSection(),
+              _buildFluxoCreditosSection(lancamentos),
               const SizedBox(height: 24),
               const Text(
                 "Detalhamento Mensal (Fluxo de Abatimento)",
@@ -162,7 +162,10 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildFluxoCreditosSection() {
+  // --- O CARD COM A OBSERVAÇÃO LARANJA ACONTECE AQUI ---
+  Widget _buildFluxoCreditosSection(
+    List<LancamentoMensal> lancamentosAuditados,
+  ) {
     final boxUsinas = Hive.box<Usina>('usinas');
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
     final numero = NumberFormat.decimalPattern('pt_BR');
@@ -170,41 +173,142 @@ class AuditoriaIndividualScreen extends StatelessWidget {
 
     if (usina.isGeradora) {
       for (var b in usina.beneficiarias) {
-        double total = 0;
-        final meusLancs = boxLancamentos.values.where(
-          (l) => l.usinaId == usina.id,
-        );
-        for (var l in meusLancs) {
-          total += (l.energiaInjetadaKwh * (b.percentual / 100));
+        double totalReal = 0;
+
+        final lancsDaFilha = boxLancamentos.values
+            .where((l) => l.usinaId == b.idUsinaFilha && !l.isDeletado)
+            .toList();
+
+        for (var lGeradora in lancamentosAuditados) {
+          try {
+            final faturaDaFilhaNoMesmoMes = lancsDaFilha.firstWhere(
+              (lf) =>
+                  lf.dataReferencia.year == lGeradora.dataReferencia.year &&
+                  lf.dataReferencia.month == lGeradora.dataReferencia.month,
+            );
+            totalReal += faturaDaFilhaNoMesmoMes.energiaInjetadaKwh;
+          } catch (_) {}
         }
+
         tiles.add(
-          _buildFluxoTile(b.nome, b.percentual, total, Colors.orange, numero),
+          _buildFluxoTile(
+            b.nome,
+            b.percentual,
+            totalReal,
+            Colors.orange,
+            numero,
+          ),
         );
       }
     } else {
+      // SE FOR BENEFICIÁRIA (Onde acontece a divergência)
+      double totalTeoricoGlobal = 0;
+      double totalRealGlobal = 0;
+
+      // 1. Calcula o total real que a filha recebeu neste período auditado
+      for (var lFilha in lancamentosAuditados) {
+        totalRealGlobal += lFilha.energiaInjetadaKwh;
+      }
+
       final maes = boxUsinas.values.where(
         (u) =>
             u.isGeradora &&
+            !u.isDeletado &&
             u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
       );
+
+      // 2. Calcula o total teórico vindo das mães
       for (var mae in maes) {
         final vinculo = mae.beneficiarias.firstWhere(
           (b) => b.idUsinaFilha == usina.id,
         );
-        double total = 0;
-        final lancsMae = boxLancamentos.values.where(
-          (l) => l.usinaId == mae.id,
-        );
-        for (var l in lancsMae) {
-          total += (l.energiaInjetadaKwh * (vinculo.percentual / 100));
+        double totalTeoricoDestaMae = 0;
+
+        final lancsMae = boxLancamentos.values
+            .where((l) => l.usinaId == mae.id && !l.isDeletado)
+            .toList();
+
+        for (var lFilha in lancamentosAuditados) {
+          try {
+            final faturaDaMaeNoMesmoMes = lancsMae.firstWhere(
+              (lm) =>
+                  lm.dataReferencia.year == lFilha.dataReferencia.year &&
+                  lm.dataReferencia.month == lFilha.dataReferencia.month,
+            );
+            totalTeoricoDestaMae +=
+                (faturaDaMaeNoMesmoMes.energiaInjetadaKwh *
+                (vinculo.percentual / 100));
+          } catch (_) {}
         }
+
+        totalTeoricoGlobal += totalTeoricoDestaMae;
+
         tiles.add(
           _buildFluxoTile(
             mae.nome,
             vinculo.percentual,
-            total,
+            totalTeoricoDestaMae,
             Colors.blue,
             numero,
+            isTeorico: true, // Adiciona um pequeno marcador visual
+          ),
+        );
+      }
+
+      // 3. SE HOUVER DIVERGÊNCIA (Retenção), MOSTRA O ALERTA LARANJA!
+      if ((totalTeoricoGlobal - totalRealGlobal) > 1.0) {
+        tiles.add(
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.orange.shade800,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "Retenção da Concessionária",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange.shade900,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  "Era esperado um crédito de ${numero.format(totalTeoricoGlobal)} kWh, mas a concessionária creditou apenas ${numero.format(totalRealGlobal)} kWh reais na fatura.",
+                  style: TextStyle(
+                    color: Colors.orange.shade900,
+                    fontSize: 13,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Diferença retida: ${numero.format(totalTeoricoGlobal - totalRealGlobal)} kWh",
+                  style: TextStyle(
+                    color: Colors.orange.shade900,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       }
@@ -218,8 +322,8 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         const SizedBox(height: 20),
         Text(
           usina.isGeradora
-              ? "Destino dos Créditos (Anual)"
-              : "Origem dos Créditos (Anual)",
+              ? "Destino dos Créditos (Acumulado Real)"
+              : "Origem dos Créditos (Cálculo Esperado)",
           style: const TextStyle(
             fontWeight: FontWeight.bold,
             color: Colors.blueGrey,
@@ -237,8 +341,9 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     double perc,
     double valor,
     Color cor,
-    NumberFormat numero,
-  ) {
+    NumberFormat numero, {
+    bool isTeorico = false,
+  }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -249,9 +354,24 @@ class AuditoriaIndividualScreen extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            "$nome (${perc.toStringAsFixed(0)}%)",
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+          Row(
+            children: [
+              Text(
+                "$nome (${perc.toStringAsFixed(0)}%)",
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              if (isTeorico) ...[
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.info_outline,
+                  size: 12,
+                  color: cor.withValues(alpha: 0.6),
+                ),
+              ],
+            ],
           ),
           Text(
             "${numero.format(valor)} kWh",
@@ -269,32 +389,8 @@ class AuditoriaIndividualScreen extends StatelessWidget {
   Widget _buildMesAuditoriaCard(LancamentoMensal l, Usina usina) {
     final numero = NumberFormat.decimalPattern('pt_BR');
     final moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
-    final boxUsinas = Hive.box<Usina>('usinas');
-    final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
 
-    // Cálculo do crédito do mês
-    double creditoNoMes = 0;
-    if (!usina.isGeradora) {
-      final maes = boxUsinas.values.where(
-        (u) =>
-            u.isGeradora &&
-            u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
-      );
-      for (var mae in maes) {
-        final v = mae.beneficiarias.firstWhere(
-          (b) => b.idUsinaFilha == usina.id,
-        );
-        try {
-          final lm = boxLancamentos.values.firstWhere(
-            (x) =>
-                x.usinaId == mae.id &&
-                x.dataReferencia.year == l.dataReferencia.year &&
-                x.dataReferencia.month == l.dataReferencia.month,
-          );
-          creditoNoMes += (lm.energiaInjetadaKwh * (v.percentual / 100));
-        } catch (_) {}
-      }
-    }
+    double creditoNoMes = l.energiaInjetadaKwh;
 
     double consumoReal = usina.isGeradora
         ? ((l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
@@ -304,7 +400,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               l.energiaConsumidaRedeKwh)
         : l.energiaConsumidaRedeKwh;
 
-    // Lógica de "Abatimento" para o texto
     double saldoAposCredito = usina.isGeradora
         ? (l.energiaInjetadaKwh - l.energiaConsumidaRedeKwh)
         : (creditoNoMes - l.energiaConsumidaRedeKwh);
@@ -344,7 +439,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               ],
             ),
             const Divider(height: 24),
-            // Linha 1: O que entrou e o que saiu
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -378,7 +472,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     const Text(
-                      "Total de Créditos Recebidos no mês:",
+                      "Total de Créditos Recebidos (Fatura):",
                       style: TextStyle(fontSize: 11, color: Colors.blueGrey),
                     ),
                     Text(

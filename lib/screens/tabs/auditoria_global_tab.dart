@@ -1,15 +1,13 @@
 // Caminho: lib/screens/tabs/auditoria_global_tab.dart
-// Descrição: Aba de Análise Global (Balanço Energético + Vilões).
-// Atualização: Layout Bento Grid para Web; Mobile com Scroll Horizontal no Gráfico.
-// ATUALIZAÇÃO RECENTE: Pull-to-Refresh com Feedback Padronizado via AppFeedback.
+// Descrição: Aba de Análise Global com Custo Projetado corrigido via Cálculo Inverso de Energia Evitada.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import '../../models/usina.dart';
 import '../../models/lancamento.dart';
-import '../../services/sincronizacao_service.dart'; // <-- IMPORT PARA O REFRESH
-import '../../utils/app_feedback.dart'; // <-- IMPORT DO PADRÃO DE FEEDBACK
+import '../../services/sincronizacao_service.dart';
+import '../../utils/app_feedback.dart';
 
 class AuditoriaGlobalTab extends StatefulWidget {
   const AuditoriaGlobalTab({super.key});
@@ -19,15 +17,12 @@ class AuditoriaGlobalTab extends StatefulWidget {
 }
 
 class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
-  String _filtroSelecionado = '6M'; // Opções: '6M', '12M', 'ANO'
+  String _filtroSelecionado = '6M';
 
-  // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
   Future<void> _handleRefresh(BuildContext context) async {
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
-
       if (!context.mounted) return;
-
       if (resultado.contains('Erro') ||
           resultado.contains('Sem internet') ||
           resultado.contains('offline')) {
@@ -35,11 +30,7 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
       } else if (resultado == 'Sincronizado.') {
         AppFeedback.show(context, "Tudo já está sincronizado.", isError: false);
       } else {
-        AppFeedback.show(
-          context,
-          "Dados sincronizados com sucesso!",
-          isError: false,
-        );
+        AppFeedback.show(context, "Dados atualizados!", isError: false);
       }
     } catch (e) {
       if (context.mounted) {
@@ -48,30 +39,50 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     }
   }
 
+  List<LancamentoMensal> _filtrarLancamentos(List<LancamentoMensal> todos) {
+    DateTime agora = DateTime.now();
+    DateTime dataLimite;
+
+    if (_filtroSelecionado == '6M') {
+      dataLimite = DateTime(agora.year, agora.month - 5, 1);
+    } else if (_filtroSelecionado == '12M') {
+      dataLimite = DateTime(agora.year, agora.month - 11, 1);
+    } else {
+      dataLimite = DateTime(agora.year, 1, 1);
+    }
+
+    return todos.where((l) {
+      if (l.isDeletado) return false;
+      if (_filtroSelecionado == 'ANO' && l.dataReferencia.year != agora.year) {
+        return false;
+      }
+      return l.dataReferencia.isAfter(
+        dataLimite.subtract(const Duration(days: 1)),
+      );
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder(
       valueListenable: Hive.box<LancamentoMensal>('lancamentos').listenable(),
       builder: (context, Box<LancamentoMensal> box, _) {
-        final todosLancamentos = box.values
-            .where((l) => !l.isDeletado)
-            .toList();
+        final todosLancs = box.values.toList();
+        final lancamentosFiltrados = _filtrarLancamentos(todosLancs);
 
-        if (todosLancamentos.isEmpty) {
-          // O RefreshIndicator na tela vazia permite puxar para tentar baixar dados iniciais
+        if (todosLancs.isEmpty) {
           return RefreshIndicator(
             color: Colors.deepOrange,
             backgroundColor: Colors.white,
             onRefresh: () => _handleRefresh(context),
-            child: CustomScrollView(
-              // Necessário para o RefreshIndicator funcionar em telas sem listas
-              physics: const AlwaysScrollableScrollPhysics(),
+            child: const CustomScrollView(
+              physics: AlwaysScrollableScrollPhysics(),
               slivers: [
                 SliverFillRemaining(
                   child: Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      children: const [
+                      children: [
                         Icon(
                           Icons.analytics_outlined,
                           size: 48,
@@ -91,290 +102,237 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
           );
         }
 
-        final dadosGrafico = _processarDadosGrafico(todosLancamentos);
-        final topViloes = _processarTopViloes(todosLancamentos);
+        final boxUsinas = Hive.box<Usina>('usinas');
+
+        double totalGeralGerado = 0;
+        double totalGeralConsumido = 0;
+        Map<String, double> consumoPorUsina = {};
+        Map<String, Map<String, dynamic>> dadosMensais = {};
+
+        for (var l in lancamentosFiltrados) {
+          Usina? u;
+          try {
+            u = boxUsinas.values.firstWhere(
+              (us) => us.id == l.usinaId && !us.isDeletado,
+            );
+          } catch (_) {}
+
+          if (u != null) {
+            String key = DateFormat('yyyyMM').format(l.dataReferencia);
+            String display = DateFormat(
+              'MMM',
+              'pt_BR',
+            ).format(l.dataReferencia).toUpperCase();
+
+            if (l.dataReferencia.year != DateTime.now().year) {
+              display = DateFormat(
+                'MMM/yy',
+                'pt_BR',
+              ).format(l.dataReferencia).toUpperCase();
+            }
+
+            dadosMensais.putIfAbsent(
+              key,
+              () => {
+                'mes': display,
+                'geracao': 0.0,
+                'consumo': 0.0,
+                'custo': 0.0,
+                'custoProjetado': 0.0,
+                'date': l.dataReferencia,
+              },
+            );
+
+            double consumoReal = 0;
+            double energiaPoupada = 0;
+
+            if (u.isGeradora) {
+              totalGeralGerado += l.geracaoTotalKwh;
+              dadosMensais[key]!['geracao'] += l.geracaoTotalKwh;
+
+              double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
+                  .clamp(0.0, double.infinity);
+              consumoReal = autoconsumo + l.energiaConsumidaRedeKwh;
+
+              // A energia que a usina geradora evitou que você comprasse foi exatamente a geração total dela.
+              energiaPoupada = l.geracaoTotalKwh;
+            } else {
+              consumoReal = l.energiaConsumidaRedeKwh;
+
+              // Para beneficiária, a energia evitada foi o crédito que ela recebeu e abateu.
+              energiaPoupada = l.energiaInjetadaKwh;
+            }
+
+            // O Cálculo Perfeito e Incontestável:
+            // Custo Projetado = O que eu paguei + (Toda a energia que o painel fez o favor de me dar * Preço da Energia)
+            double economiaFinanceira = energiaPoupada * l.tarifaKwh;
+            double custoProjetado = l.valorFaturaR + economiaFinanceira;
+
+            totalGeralConsumido += consumoReal;
+            dadosMensais[key]!['consumo'] += consumoReal;
+            dadosMensais[key]!['custo'] += l.valorFaturaR;
+            dadosMensais[key]!['custoProjetado'] += custoProjetado;
+
+            consumoPorUsina[u.nome] =
+                (consumoPorUsina[u.nome] ?? 0) + consumoReal;
+          }
+        }
+
+        List<Map<String, dynamic>> graficoOrdenado = dadosMensais.values
+            .toList();
+        graficoOrdenado.sort(
+          (a, b) => (a['date'] as DateTime).compareTo(b['date']),
+        );
+
+        List<MapEntry<String, double>> rankingOrdenado = consumoPorUsina.entries
+            .toList();
+        rankingOrdenado.sort((a, b) => b.value.compareTo(a.value));
 
         return LayoutBuilder(
           builder: (context, constraints) {
             bool isWeb = constraints.maxWidth >= 900;
 
-            if (isWeb) {
-              // ===============================================================
-              // LAYOUT WEB: COLUNAS LADO A LADO (BENTO GRID) COM REFRESH
-              // ===============================================================
-              return RefreshIndicator(
-                color: Colors.deepOrange,
-                backgroundColor: Colors.white,
-                onRefresh: () => _handleRefresh(context),
-                child: SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.all(32),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // ESQUERDA: Gráfico (Ganha mais espaço)
-                      Expanded(
-                        flex: 2,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Text(
-                                      "Balanço Energético",
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 20,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Tooltip(
-                                      message:
-                                          'Comparativo entre produção e consumo em todas as unidades.',
-                                      child: Icon(
-                                        Icons.info_outline,
-                                        size: 20,
-                                        color: Colors.grey.shade400,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                Row(
-                                  children: [
-                                    _buildFilterChip('6 Meses', '6M'),
-                                    const SizedBox(width: 8),
-                                    _buildFilterChip('12 Meses', '12M'),
-                                    const SizedBox(width: 8),
-                                    _buildFilterChip('Este Ano', 'ANO'),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 24),
-                            // Gráfico estendido para Web (altura de 350px)
-                            _buildGraficoContainer(dadosGrafico, 350, isWeb),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 32),
-                      // DIREITA: Top Vilões
-                      Expanded(
-                        flex: 1,
-                        child: Container(
-                          padding: const EdgeInsets.all(24),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.grey.shade200),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                "Top 3 - Maiores Faturas",
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              const Text(
-                                "Referência do último mês registrado.",
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                              const SizedBox(height: 20),
-                              if (topViloes.isEmpty)
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 20),
-                                  child: Text(
-                                    "Nenhuma fatura relevante encontrada.",
-                                    style: TextStyle(color: Colors.grey),
-                                  ),
-                                )
-                              else
-                                ...topViloes.map(
-                                  (item) => _buildVilaoCard(item),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            } else {
-              // ===============================================================
-              // LAYOUT MOBILE (COM REFRESH INJETADO)
-              // ===============================================================
-              return RefreshIndicator(
-                color: Colors.deepOrange,
-                backgroundColor: Colors.white,
-                onRefresh: () => _handleRefresh(context),
-                child: ListView(
-                  physics:
-                      const AlwaysScrollableScrollPhysics(), // Necessário para o pull funcionar
-                  padding: const EdgeInsets.all(20),
+            return RefreshIndicator(
+              color: Colors.deepOrange,
+              backgroundColor: Colors.white,
+              onRefresh: () => _handleRefresh(context),
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.all(isWeb ? 32 : 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: isWeb
+                          ? CrossAxisAlignment.end
+                          : CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          "Balanço Energético",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
+                        const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              "Visão Global",
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 24,
+                                color: Colors.black87,
+                              ),
+                            ),
+                            Text(
+                              "Balanço total da empresa.",
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ],
                         ),
-                        Tooltip(
-                          message:
-                              'Comparativo entre o que foi produzido e o que foi realmente consumido em todas as unidades.',
-                          triggerMode: TooltipTriggerMode.tap,
-                          child: Icon(
-                            Icons.info_outline,
-                            size: 20,
-                            color: Colors.grey.shade400,
-                          ),
-                        ),
+                        if (isWeb)
+                          _buildFiltrosRow()
+                        else
+                          const SizedBox.shrink(),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    if (!isWeb) ...[
+                      const SizedBox(height: 16),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: _buildFiltrosRow(),
+                      ),
+                    ],
+                    const SizedBox(height: 24),
 
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
+                    if (isWeb) ...[
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _buildFilterChip('6 Meses', '6M'),
-                          const SizedBox(width: 8),
-                          _buildFilterChip('12 Meses', '12M'),
-                          const SizedBox(width: 8),
-                          _buildFilterChip(
-                            'Este Ano (${DateTime.now().year})',
-                            'ANO',
+                          Expanded(
+                            flex: 1,
+                            child: _buildTermometroCard(
+                              totalGeralGerado,
+                              totalGeralConsumido,
+                            ),
+                          ),
+                          const SizedBox(width: 24),
+                          Expanded(
+                            flex: 2,
+                            child: _buildRankingCard(
+                              rankingOrdenado,
+                              totalGeralConsumido,
+                            ),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    // Gráfico original do Mobile (altura de 260px)
-                    _buildGraficoContainer(dadosGrafico, 260, isWeb),
-
-                    const SizedBox(height: 30),
-
-                    const Text(
-                      "Top 3 - Maiores Faturas (Último Mês)",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                      const SizedBox(height: 24),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 1,
+                            child: _buildBalancoLinhasCard(graficoOrdenado),
+                          ),
+                          const SizedBox(width: 24),
+                          Expanded(
+                            flex: 1,
+                            child: _buildGeracaoLinhaCard(graficoOrdenado),
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      "Onde seu dinheiro está indo embora.",
-                      style: TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 12),
-
-                    if (topViloes.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 20),
-                        child: Text(
-                          "Nenhuma fatura relevante encontrada no último mês.",
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      )
-                    else
-                      ...topViloes.map((item) => _buildVilaoCard(item)),
-
-                    const SizedBox(height: 50),
+                      const SizedBox(height: 24),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            flex: 1,
+                            child: _buildFinanceiroCard(graficoOrdenado),
+                          ),
+                          const SizedBox(width: 24),
+                          Expanded(
+                            flex: 1,
+                            child: _buildTopViloesCard(
+                              lancamentosFiltrados,
+                              boxUsinas,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
+                      _buildTermometroCard(
+                        totalGeralGerado,
+                        totalGeralConsumido,
+                      ),
+                      const SizedBox(height: 16),
+                      _buildRankingCard(rankingOrdenado, totalGeralConsumido),
+                      const SizedBox(height: 16),
+                      _buildBalancoLinhasCard(graficoOrdenado),
+                      const SizedBox(height: 16),
+                      _buildGeracaoLinhaCard(graficoOrdenado),
+                      const SizedBox(height: 16),
+                      _buildFinanceiroCard(graficoOrdenado),
+                      const SizedBox(height: 16),
+                      _buildTopViloesCard(lancamentosFiltrados, boxUsinas),
+                    ],
+                    const SizedBox(height: 80),
                   ],
                 ),
-              );
-            }
+              ),
+            );
           },
         );
       },
     );
   }
 
-  // --- COMPONENTES VISUAIS ---
-
-  Widget _buildGraficoContainer(
-    List<Map<String, dynamic>> dadosGrafico,
-    double alturaTotal,
-    bool isWeb,
-  ) {
-    return Container(
-      height: alturaTotal,
-      padding: const EdgeInsets.fromLTRB(12, 24, 12, 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _buildLegendItem("Geração (Produziu)", Colors.orange),
-              const SizedBox(width: 16),
-              _buildLegendItem("Consumo (Gastou)", Colors.blue),
-            ],
-          ),
-          const SizedBox(height: 20),
-          // SOLUÇÃO DO RENDERFLEX: Gráfico envolto num Scroll Horizontal para evitar esmagamento no telemóvel
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                double availableHeight = constraints.maxHeight;
-                double maxBarHeight = availableHeight - 45;
-                if (maxBarHeight < 10) {
-                  maxBarHeight = 10;
-                }
-
-                // Calcula a largura necessária para o gráfico
-                // No telemóvel, cada mês ocupa pelo menos 60 pixels de largura para não esmagar.
-                // Na Web, divide-se o ecrã igualmente.
-                double chartWidth = isWeb
-                    ? constraints.maxWidth
-                    : (dadosGrafico.length * 60.0).clamp(
-                        constraints.maxWidth,
-                        double.infinity,
-                      );
-
-                return SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  physics: const BouncingScrollPhysics(),
-                  child: SizedBox(
-                    width: chartWidth,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: dadosGrafico.map((mesData) {
-                        return _buildBarraMes(mesData, maxBarHeight);
-                      }).toList(),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
+  Widget _buildFiltrosRow() {
+    return Row(
+      children: [
+        _buildFilterChip('6 Meses', '6M'),
+        const SizedBox(width: 8),
+        _buildFilterChip('12 Meses', '12M'),
+        const SizedBox(width: 8),
+        _buildFilterChip('Este Ano', 'ANO'),
+      ],
     );
   }
 
@@ -394,12 +352,392 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
         color: isSelected ? Colors.deepOrange : Colors.grey.shade300,
       ),
       onSelected: (bool selected) {
-        if (selected) {
-          setState(() {
-            _filtroSelecionado = value;
-          });
-        }
+        if (selected) setState(() => _filtroSelecionado = value);
       },
+    );
+  }
+
+  // 1. Termômetro
+  Widget _buildTermometroCard(double geracao, double consumo) {
+    double percentual = consumo > 0 ? (geracao / consumo) : 0.0;
+    Color corGauage = percentual >= 1.0
+        ? Colors.green
+        : (percentual > 0.6 ? Colors.orange : Colors.red);
+
+    return _buildBaseCard(
+      titulo: "Autossuficiência",
+      icone: Icons.thermostat,
+      child: Column(
+        children: [
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 120,
+            width: 120,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                CircularProgressIndicator(
+                  value: percentual.clamp(0.0, 1.0),
+                  strokeWidth: 12,
+                  backgroundColor: Colors.grey.shade100,
+                  valueColor: AlwaysStoppedAnimation<Color>(corGauage),
+                  strokeCap: StrokeCap.round,
+                ),
+                Center(
+                  child: Text(
+                    "${(percentual * 100).toStringAsFixed(0)}%",
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: corGauage,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            percentual >= 1.0 ? "Operação Sustentável" : "Dependente da Rede",
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 2. Ranking de Consumo
+  Widget _buildRankingCard(
+    List<MapEntry<String, double>> ranking,
+    double totalConsumo,
+  ) {
+    final numFormat = NumberFormat.decimalPattern('pt_BR');
+
+    return _buildBaseCard(
+      titulo: "Ranking de Consumo",
+      icone: Icons.format_list_numbered,
+      child: ranking.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Text(
+                  "Sem consumo.",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          : Column(
+              children: ranking.take(4).map((entry) {
+                double perc = totalConsumo > 0
+                    ? (entry.value / totalConsumo)
+                    : 0;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              entry.key,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            "${numFormat.format(entry.value)} kWh (${(perc * 100).toStringAsFixed(0)}%)",
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      LinearProgressIndicator(
+                        value: perc,
+                        backgroundColor: Colors.blue.withValues(alpha: 0.1),
+                        valueColor: const AlwaysStoppedAnimation(Colors.blue),
+                        minHeight: 6,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+    );
+  }
+
+  // 3. Balanço Energético (Linhas Duplas)
+  Widget _buildBalancoLinhasCard(List<Map<String, dynamic>> dados) {
+    return _buildBaseCard(
+      titulo: "Balanço Energético",
+      icone: Icons.analytics_outlined,
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildLegendItem("Geração", Colors.orange),
+              const SizedBox(width: 16),
+              _buildLegendItem("Consumo", Colors.blue),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (dados.isEmpty)
+            const SizedBox(
+              height: 240,
+              child: Center(
+                child: Text(
+                  "Sem dados suficientes",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 240,
+              width: double.infinity,
+              child: CustomPaint(
+                painter: _DoubleLineChartPainter(
+                  dados,
+                  Colors.orange,
+                  Colors.blue,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 4. Gráfico de Linha (Geração Única)
+  Widget _buildGeracaoLinhaCard(List<Map<String, dynamic>> dados) {
+    return _buildBaseCard(
+      titulo: "Evolução da Geração",
+      icone: Icons.show_chart,
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [_buildLegendItem("Produção Solar", Colors.orange)],
+          ),
+          const SizedBox(height: 16),
+          if (dados.isEmpty)
+            const SizedBox(
+              height: 240,
+              child: Center(
+                child: Text(
+                  "Sem dados suficientes",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 240,
+              width: double.infinity,
+              child: CustomPaint(
+                painter: _SingleLineChartPainter(dados, Colors.orange),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 5. Gráfico Financeiro (Custo Evitado - Barras)
+  Widget _buildFinanceiroCard(List<Map<String, dynamic>> dados) {
+    return _buildBaseCard(
+      titulo: "Custo Evitado (Economia)",
+      icone: Icons.savings_outlined,
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildLegendItem("Sem Solar (Projetado)", Colors.grey.shade300),
+              const SizedBox(width: 16),
+              _buildLegendItem("Com Solar (Real)", Colors.green),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (dados.isEmpty)
+            const SizedBox(
+              height: 240,
+              child: Center(
+                child: Text(
+                  "Sem dados suficientes",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 240,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: dados.map((d) {
+                  double maxVal = _getMaxVal(dados, [
+                    'custoProjetado',
+                    'custo',
+                  ]);
+                  double maxBarHeight = 175;
+
+                  double hFundo = (d['custoProjetado'] / maxVal) * maxBarHeight;
+                  double hFrente = (d['custo'] / maxVal) * maxBarHeight;
+
+                  return Expanded(
+                    child: _buildColSobreposta(
+                      d['mes'],
+                      d['custoProjetado'],
+                      d['custo'],
+                      hFundo,
+                      hFrente,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // 6. Top Vilões
+  Widget _buildTopViloesCard(
+    List<LancamentoMensal> lancamentos,
+    Box<Usina> boxUsinas,
+  ) {
+    final moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+
+    List<LancamentoMensal> ordenados = List.from(lancamentos);
+    if (ordenados.isEmpty) {
+      return _buildBaseCard(
+        titulo: "Maiores Faturas",
+        icone: Icons.warning_amber_rounded,
+        child: const Center(child: Text("Sem dados")),
+      );
+    }
+
+    ordenados.sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
+    DateTime ultimaData = ordenados.first.dataReferencia;
+
+    var doMes = ordenados
+        .where(
+          (l) =>
+              l.dataReferencia.year == ultimaData.year &&
+              l.dataReferencia.month == ultimaData.month,
+        )
+        .toList();
+    doMes.sort((a, b) => b.valorFaturaR.compareTo(a.valorFaturaR));
+
+    return _buildBaseCard(
+      titulo:
+          "Vilões do Mês (${DateFormat('MMM', 'pt_BR').format(ultimaData).toUpperCase()})",
+      icone: Icons.warning_amber_rounded,
+      child: Column(
+        children: doMes.take(3).toList().asMap().entries.map((entry) {
+          int rank = entry.key + 1;
+          var l = entry.value;
+          String nomeUsina = "Desconhecida";
+          try {
+            nomeUsina = boxUsinas.values
+                .firstWhere((u) => u.id == l.usinaId)
+                .nome;
+          } catch (_) {}
+
+          Color corRank = rank == 1
+              ? Colors.red
+              : (rank == 2 ? Colors.orange : Colors.amber);
+
+          return Card(
+            elevation: 0,
+            margin: const EdgeInsets.only(bottom: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade200),
+            ),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: corRank.withValues(alpha: 0.1),
+                child: Text(
+                  '#$rank',
+                  style: TextStyle(color: corRank, fontWeight: FontWeight.bold),
+                ),
+              ),
+              title: Text(
+                nomeUsina,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+              trailing: Text(
+                moeda.format(l.valorFaturaR),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.redAccent,
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  // --- AUXILIARES DE UI ---
+  Widget _buildBaseCard({
+    required String titulo,
+    required IconData icone,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icone, size: 20, color: Colors.blueGrey),
+              const SizedBox(width: 8),
+              Text(
+                titulo,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                  color: Colors.blueGrey,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          child,
+        ],
+      ),
     );
   }
 
@@ -424,84 +762,84 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  Widget _buildBarraMes(Map<String, dynamic> data, double maxHeight) {
-    double maiorValorDoDataset = 5000;
-    if (data['geracao'] > maiorValorDoDataset) {
-      maiorValorDoDataset = data['geracao'];
+  double _getMaxVal(List<Map<String, dynamic>> dados, List<String> keys) {
+    double m = 0;
+    for (var d in dados) {
+      for (var k in keys) {
+        if (d[k] > m) m = d[k];
+      }
     }
-    if (data['consumo'] > maiorValorDoDataset) {
-      maiorValorDoDataset = data['consumo'];
-    }
-    if (maiorValorDoDataset == 0) maiorValorDoDataset = 1;
+    return m == 0 ? 1 : m;
+  }
 
-    double hLaranja = (data['geracao'] / maiorValorDoDataset) * maxHeight;
-    double hAzul = (data['consumo'] / maiorValorDoDataset) * maxHeight;
-
-    if (hLaranja < 4 && data['geracao'] > 0) hLaranja = 4;
-    if (hAzul < 4 && data['consumo'] > 0) hAzul = 4;
+  Widget _buildColSobreposta(
+    String mes,
+    double vFundo,
+    double vFrente,
+    double hFundo,
+    double hFrente,
+  ) {
+    hFundo = hFundo < 4 && vFundo > 0 ? 4 : hFundo;
+    hFrente = hFrente < 4 && vFrente > 0 ? 4 : hFrente;
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Column(
-              mainAxisAlignment:
-                  MainAxisAlignment.end, // Garante que alinhem pelo fundo
-              children: [
-                if (data['geracao'] > 0)
-                  Text(
-                    NumberFormat.compact().format(data['geracao']),
-                    style: const TextStyle(
-                      fontSize: 9,
-                      color: Colors.orange,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                const SizedBox(height: 2),
-                Container(
-                  width: 12,
-                  height: hLaranja,
-                  decoration: BoxDecoration(
-                    color: Colors.orange,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ],
+        // Se a economia for real, mostra o projetado em cima
+        if (vFundo > (vFrente + 1.0))
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              NumberFormat.compact().format(vFundo),
+              style: TextStyle(
+                fontSize: 8,
+                color: Colors.grey.shade400,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-            const SizedBox(width: 4),
-            Column(
-              mainAxisAlignment:
-                  MainAxisAlignment.end, // Garante que alinhem pelo fundo
-              children: [
-                if (data['consumo'] > 0)
-                  Text(
-                    NumberFormat.compact().format(data['consumo']),
-                    style: const TextStyle(
-                      fontSize: 9,
-                      color: Colors.blue,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                const SizedBox(height: 2),
-                Container(
-                  width: 12,
-                  height: hAzul,
-                  decoration: BoxDecoration(
-                    color: Colors.blue,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ],
+          ),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            NumberFormat.compact().format(vFrente),
+            style: const TextStyle(
+              fontSize: 9,
+              color: Colors.green,
+              fontWeight: FontWeight.bold,
             ),
-          ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: 24,
+          height: hFundo,
+          child: Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              Container(
+                width: 18,
+                height: hFundo,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              Container(
+                width: 10,
+                height: hFrente,
+                decoration: BoxDecoration(
+                  color: Colors.green,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 8),
         Text(
-          data['mes'],
+          mes,
           style: const TextStyle(
-            fontSize: 10,
+            fontSize: 9,
             fontWeight: FontWeight.bold,
             color: Colors.black54,
           ),
@@ -509,173 +847,305 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
       ],
     );
   }
+}
 
-  Widget _buildVilaoCard(Map<String, dynamic> item) {
-    final moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
-    int rank = item['rank'];
-    Color corRank = rank == 1
-        ? Colors.red
-        : (rank == 2 ? Colors.orange : Colors.amber);
+// Pintor Customizado para o Gráfico de DUAS Linhas (Balanço Energético)
+class _DoubleLineChartPainter extends CustomPainter {
+  final List<Map<String, dynamic>> dados;
+  final Color colorGeracao;
+  final Color colorConsumo;
 
-    return Card(
-      elevation: 0,
-      color: Colors.white,
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey.withValues(alpha: 0.2)),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: CircleAvatar(
-          backgroundColor: corRank.withValues(alpha: 0.1),
-          child: Text(
-            '#$rank',
-            style: TextStyle(color: corRank, fontWeight: FontWeight.bold),
-          ),
-        ),
-        title: Text(
-          item['nomeUsina'],
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Text('Pagou ${moeda.format(item['valor'])}'),
-        trailing: const Icon(
-          Icons.arrow_forward_ios,
-          size: 14,
-          color: Colors.grey,
-        ),
-      ),
+  _DoubleLineChartPainter(this.dados, this.colorGeracao, this.colorConsumo);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (dados.isEmpty) return;
+
+    double maxVal = 0;
+    for (var d in dados) {
+      if (d['geracao'] > maxVal) maxVal = d['geracao'];
+      if (d['consumo'] > maxVal) maxVal = d['consumo'];
+    }
+    if (maxVal == 0) maxVal = 1;
+
+    double paddingTop = 25.0;
+    double paddingBottom = 25.0;
+    double chartHeight = size.height - paddingTop - paddingBottom;
+    double chartBottomY = size.height - paddingBottom;
+
+    double marginX = 20.0;
+    double stepX =
+        (size.width - (marginX * 2)) /
+        (dados.length > 1 ? (dados.length - 1) : 1);
+
+    List<Offset> pointsG = [];
+    List<Offset> pointsC = [];
+
+    for (int i = 0; i < dados.length; i++) {
+      double x = marginX + (i * stepX);
+      double dyG =
+          paddingTop +
+          chartHeight -
+          ((dados[i]['geracao'] / maxVal) * chartHeight);
+      double dyC =
+          paddingTop +
+          chartHeight -
+          ((dados[i]['consumo'] / maxVal) * chartHeight);
+      pointsG.add(Offset(x, dyG));
+      pointsC.add(Offset(x, dyC));
+    }
+
+    _drawPath(
+      canvas,
+      size,
+      pointsC,
+      colorConsumo,
+      chartHeight,
+      paddingTop,
+      chartBottomY,
     );
-  }
+    _drawPath(
+      canvas,
+      size,
+      pointsG,
+      colorGeracao,
+      chartHeight,
+      paddingTop,
+      chartBottomY,
+    );
 
-  // --- LÓGICA DE DADOS (MANTIDA INTACTA) ---
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
 
-  List<Map<String, dynamic>> _processarDadosGrafico(
-    List<LancamentoMensal> lancamentos,
-  ) {
-    final boxUsinas = Hive.box<Usina>('usinas');
-    Map<String, Map<String, dynamic>> agrupado = {};
+    for (int i = 0; i < dados.length; i++) {
+      textPainter.text = TextSpan(
+        text: dados[i]['mes'],
+        style: const TextStyle(
+          fontSize: 9,
+          color: Colors.black54,
+          fontWeight: FontWeight.bold,
+        ),
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(pointsG[i].dx - (textPainter.width / 2), chartBottomY + 8),
+      );
 
-    for (var l in lancamentos) {
-      String keySort = DateFormat('yyyyMM').format(l.dataReferencia);
-      String keyDisplay = DateFormat(
-        'MMM',
-        'pt_BR',
-      ).format(l.dataReferencia).toUpperCase();
-
-      if (keySort.substring(0, 4) != DateTime.now().year.toString()) {
-        keyDisplay = DateFormat(
-          'MMM/yy',
-          'pt_BR',
-        ).format(l.dataReferencia).toUpperCase();
-      }
-
-      if (!agrupado.containsKey(keySort)) {
-        agrupado[keySort] = {
-          'display': keyDisplay,
-          'geracao': 0.0,
-          'consumo': 0.0,
-          'date': l.dataReferencia,
-        };
-      }
-
-      Usina? usina;
-      try {
-        usina = boxUsinas.values.firstWhere(
-          (u) => u.id == l.usinaId && !u.isDeletado,
+      if (dados[i]['geracao'] > 0) {
+        textPainter.text = TextSpan(
+          text: NumberFormat.compact().format(dados[i]['geracao']),
+          style: TextStyle(
+            fontSize: 9,
+            color: colorGeracao,
+            fontWeight: FontWeight.bold,
+          ),
         );
-      } catch (e) {
-        usina = null;
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(pointsG[i].dx - (textPainter.width / 2), pointsG[i].dy - 16),
+        );
       }
 
-      if (usina != null) {
-        if (usina.isGeradora) {
-          agrupado[keySort]!['geracao'] += l.geracaoTotalKwh;
-          double autoconsumo = l.geracaoTotalKwh - l.energiaInjetadaKwh;
-          if (autoconsumo < 0) autoconsumo = 0;
-          agrupado[keySort]!['consumo'] +=
-              (autoconsumo + l.energiaConsumidaRedeKwh);
-        } else {
-          agrupado[keySort]!['consumo'] += l.energiaConsumidaRedeKwh;
-        }
+      if (dados[i]['consumo'] > 0) {
+        textPainter.text = TextSpan(
+          text: NumberFormat.compact().format(dados[i]['consumo']),
+          style: TextStyle(
+            fontSize: 9,
+            color: colorConsumo,
+            fontWeight: FontWeight.bold,
+          ),
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(pointsC[i].dx - (textPainter.width / 2), pointsC[i].dy + 8),
+        );
       }
     }
-
-    List<Map<String, dynamic>> listaOrdenada = [];
-    agrupado.forEach((key, value) {
-      listaOrdenada.add({
-        'key': key,
-        'mes': value['display'],
-        'geracao': value['geracao'],
-        'consumo': value['consumo'],
-        'date': value['date'],
-      });
-    });
-
-    listaOrdenada.sort((a, b) => a['key'].compareTo(b['key']));
-
-    DateTime agora = DateTime.now();
-    if (_filtroSelecionado == '6M') {
-      return listaOrdenada.length > 6
-          ? listaOrdenada.sublist(listaOrdenada.length - 6)
-          : listaOrdenada;
-    } else if (_filtroSelecionado == '12M') {
-      return listaOrdenada.length > 12
-          ? listaOrdenada.sublist(listaOrdenada.length - 12)
-          : listaOrdenada;
-    } else if (_filtroSelecionado == 'ANO') {
-      return listaOrdenada
-          .where((item) => (item['date'] as DateTime).year == agora.year)
-          .toList();
-    }
-    return listaOrdenada;
   }
 
-  List<Map<String, dynamic>> _processarTopViloes(
-    List<LancamentoMensal> lancamentos,
+  void _drawPath(
+    Canvas canvas,
+    Size size,
+    List<Offset> points,
+    Color color,
+    double chartHeight,
+    double paddingTop,
+    double chartBottomY,
   ) {
-    if (lancamentos.isEmpty) return [];
+    if (points.isEmpty) return;
+    final paintLine = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final paintDot = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final paintDotBorder = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
 
-    List<LancamentoMensal> ordenados = List.from(lancamentos);
-    ordenados.sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
-    DateTime ultimaData = ordenados.first.dataReferencia;
+    final path = Path();
+    final fillPath = Path();
 
-    final boxUsinas = Hive.box<Usina>('usinas');
-
-    var doMes = ordenados.where((l) {
-      bool dataOk =
-          l.dataReferencia.year == ultimaData.year &&
-          l.dataReferencia.month == ultimaData.month;
-      if (!dataOk) return false;
-
-      try {
-        final u = boxUsinas.values.firstWhere((u) => u.id == l.usinaId);
-        return !u.isDeletado;
-      } catch (e) {
-        return false;
-      }
-    }).toList();
-
-    doMes.sort((a, b) => b.valorFaturaR.compareTo(a.valorFaturaR));
-
-    List<Map<String, dynamic>> viloes = [];
-    int contador = 1;
-
-    for (var l in doMes.take(3)) {
-      try {
-        final usina = boxUsinas.values.firstWhere((u) => u.id == l.usinaId);
-        if (l.valorFaturaR > 0) {
-          viloes.add({
-            'rank': contador,
-            'nomeUsina': usina.nome,
-            'valor': l.valorFaturaR,
-          });
-          contador++;
-        }
-      } catch (e) {
-        // Ignora erros
+    for (int i = 0; i < points.length; i++) {
+      if (i == 0) {
+        path.moveTo(points[i].dx, points[i].dy);
+        fillPath.moveTo(points[i].dx, chartBottomY);
+        fillPath.lineTo(points[i].dx, points[i].dy);
+      } else {
+        path.lineTo(points[i].dx, points[i].dy);
+        fillPath.lineTo(points[i].dx, points[i].dy);
       }
     }
-    return viloes;
+    fillPath.lineTo(points.last.dx, chartBottomY);
+    fillPath.close();
+
+    final gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [color.withValues(alpha: 0.15), color.withValues(alpha: 0.0)],
+    );
+    final paintFill = Paint()
+      ..shader = gradient.createShader(
+        Rect.fromLTWH(0, paddingTop, size.width, chartHeight),
+      );
+
+    canvas.drawPath(fillPath, paintFill);
+    canvas.drawPath(path, paintLine);
+
+    for (var p in points) {
+      canvas.drawCircle(p, 4, paintDot);
+      canvas.drawCircle(p, 4, paintDotBorder);
+    }
   }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+// Pintor Customizado para o Gráfico de UMA Linha (Evolução da Geração)
+class _SingleLineChartPainter extends CustomPainter {
+  final List<Map<String, dynamic>> dados;
+  final Color cor;
+
+  _SingleLineChartPainter(this.dados, this.cor);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (dados.isEmpty) return;
+
+    double maxVal = 0;
+    for (var d in dados) {
+      if (d['geracao'] > maxVal) maxVal = d['geracao'];
+    }
+    if (maxVal == 0) maxVal = 1;
+
+    final paintLine = Paint()
+      ..color = cor
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final paintDot = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final paintDotBorder = Paint()
+      ..color = cor
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+
+    final path = Path();
+    final fillPath = Path();
+
+    double paddingTop = 25.0;
+    double paddingBottom = 25.0;
+    double chartHeight = size.height - paddingTop - paddingBottom;
+    double chartBottomY = size.height - paddingBottom;
+
+    double marginX = 20.0;
+    double stepX =
+        (size.width - (marginX * 2)) /
+        (dados.length > 1 ? (dados.length - 1) : 1);
+
+    List<Offset> points = [];
+
+    for (int i = 0; i < dados.length; i++) {
+      double x = marginX + (i * stepX);
+      double dy =
+          paddingTop +
+          chartHeight -
+          ((dados[i]['geracao'] / maxVal) * chartHeight);
+      points.add(Offset(x, dy));
+
+      if (i == 0) {
+        path.moveTo(x, dy);
+        fillPath.moveTo(x, chartBottomY);
+        fillPath.lineTo(x, dy);
+      } else {
+        path.lineTo(x, dy);
+        fillPath.lineTo(x, dy);
+      }
+    }
+
+    if (points.isNotEmpty) {
+      fillPath.lineTo(points.last.dx, chartBottomY);
+      fillPath.close();
+
+      final gradient = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [cor.withValues(alpha: 0.3), cor.withValues(alpha: 0.0)],
+      );
+
+      final paintFill = Paint()
+        ..shader = gradient.createShader(
+          Rect.fromLTWH(0, paddingTop, size.width, chartHeight),
+        );
+
+      canvas.drawPath(fillPath, paintFill);
+      canvas.drawPath(path, paintLine);
+
+      final textPainter = TextPainter(textDirection: TextDirection.ltr);
+      for (int i = 0; i < points.length; i++) {
+        canvas.drawCircle(points[i], 4, paintDot);
+        canvas.drawCircle(points[i], 4, paintDotBorder);
+
+        textPainter.text = TextSpan(
+          text: dados[i]['mes'],
+          style: const TextStyle(
+            fontSize: 9,
+            color: Colors.black54,
+            fontWeight: FontWeight.bold,
+          ),
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(points[i].dx - (textPainter.width / 2), chartBottomY + 8),
+        );
+
+        if (dados[i]['geracao'] > 0) {
+          textPainter.text = TextSpan(
+            text: NumberFormat.compact().format(dados[i]['geracao']),
+            style: TextStyle(
+              fontSize: 9,
+              color: cor,
+              fontWeight: FontWeight.bold,
+            ),
+          );
+          textPainter.layout();
+          textPainter.paint(
+            canvas,
+            Offset(points[i].dx - (textPainter.width / 2), points[i].dy - 16),
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

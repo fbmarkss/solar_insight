@@ -1,5 +1,5 @@
 // Caminho: lib/services/auth_service.dart
-// Descrição: Serviço de Autenticação com Warm-up de permissões e Cadastro Inteligente corrigido.
+// Descrição: Serviço de Autenticação com Warm-up de permissões e Cadastro Inteligente (Freemium).
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -46,7 +46,7 @@ class AuthService {
     }
   }
 
-  // --- CADASTRO INTELIGENTE (RESTAURADO E PROTEGIDO) ---
+  // --- CADASTRO INTELIGENTE (RESTAURADO E PROTEGIDO COM PLANO) ---
   Future<String?> cadastrar(String nome, String email, String password) async {
     try {
       final emailLimpo = email.trim().toLowerCase();
@@ -96,7 +96,7 @@ class AuthService {
 
       String finalEmpresaId = empresaIdVinculada ?? user.uid;
 
-      // 3. SALVA PERFIL NO FIRESTORE
+      // 3. SALVA PERFIL NO FIRESTORE COM A NOVA ETIQUETA "GRATIS"
       await _firestore.collection('users').doc(user.uid).set({
         'uid': user.uid,
         'nome': nome,
@@ -105,6 +105,7 @@ class AuthService {
         'lastSync': FieldValue.serverTimestamp(),
         'role': roleDefinida,
         'empresaId': finalEmpresaId,
+        'plano': 'gratis', // <--- NOVA ETIQUETA INSERIDA AQUI
       });
 
       // 4. ATUALIZA STATUS DO CONVITE (se houver)

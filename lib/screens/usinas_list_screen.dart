@@ -1,14 +1,16 @@
 // Caminho: lib/screens/usinas_list_screen.dart
-// Descrição: Lista de Usinas com Navegador Aninhado e FAB Oculto na Web.
-// ATUALIZAÇÃO: Pull-to-Refresh com Feedback Padronizado via AppFeedback.
+// Descrição: Lista de Usinas com Navegador Aninhado, Pull-to-Refresh e Limites do Plano Freemium com bloqueio para Funcionários.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:provider/provider.dart';
 import '../models/usina.dart';
 import 'cadastro_usina_screen.dart';
 import 'usina_detalhes_screen.dart';
+import 'paywall_screen.dart';
 import '../services/sincronizacao_service.dart';
-import '../utils/app_feedback.dart'; // <-- IMPORT DO PADRÃO DE FEEDBACK ADICIONADO
+import '../services/subscription_provider.dart';
+import '../utils/app_feedback.dart';
 
 class UsinasListScreen extends StatefulWidget {
   const UsinasListScreen({super.key});
@@ -25,6 +27,14 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
   Future<void> _handleRefresh(BuildContext context) async {
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
+
+      // Força o guardião a verificar se o plano mudou no servidor
+      if (context.mounted) {
+        Provider.of<SubscriptionProvider>(
+          context,
+          listen: false,
+        ).carregarPlanoDoServidor();
+      }
 
       if (!context.mounted) return;
 
@@ -48,7 +58,52 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
     }
   }
 
-  // --- LÓGICA DE NAVEGAÇÃO INTELIGENTE ---
+  // --- LÓGICA DE NAVEGAÇÃO E VERIFICAÇÃO DE LIMITE (COM REGRA DE CARGO) ---
+  void _tentarCriarNovaUsina(bool isWeb, BuildContext localContext) {
+    // 1. Instancia o Guardião e o Banco de Usinas
+    final subProvider = Provider.of<SubscriptionProvider>(
+      localContext,
+      listen: false,
+    );
+    final box = Hive.box<Usina>('usinas');
+
+    // 2. Conta quantas Geradoras e Beneficiárias o usuário já possui
+    final totalGeradorasAtuais = box.values
+        .where((u) => u.isGeradora && !u.isDeletado)
+        .length;
+    final totalBeneficiariasAtuais = box.values
+        .where((u) => !u.isGeradora && !u.isDeletado)
+        .length;
+
+    // 3. Verifica se ele está BLOQUEADO TOTALMENTE (Não pode geradora NEM beneficiária)
+    if (!subProvider.podeAdicionarUsinaGeradora(totalGeradorasAtuais) &&
+        !subProvider.podeAdicionarUsinaFilha(totalBeneficiariasAtuais)) {
+      // 4. VERIFICA SE É ADMIN OU FUNCIONÁRIO
+      if (subProvider.isAdmin) {
+        // ABRE A VITRINE DE VENDAS SE FOR ADMIN
+        _abrirTela(
+          const PaywallScreen(
+            mensagemMotivo:
+                "Limite total de unidades atingido no Plano Grátis.",
+          ),
+          isWeb,
+          localContext,
+        );
+      } else {
+        // MOSTRA AVISO SE FOR FUNCIONÁRIO
+        AppFeedback.show(
+          localContext,
+          "🔒 Limite atingido. Solicite ao administrador da equipe que faça o upgrade para o plano PRO.",
+          isError: true,
+        );
+      }
+      return;
+    }
+
+    // Se ele ainda puder adicionar algo, abre a tela de cadastro normal.
+    _abrirTela(const CadastroUsinaScreen(), isWeb, localContext);
+  }
+
   void _abrirTela(Widget tela, bool isWeb, BuildContext localContext) {
     if (isWeb) {
       // Na Web: Abre a tela DENTRO da "gaiola" direita
@@ -116,8 +171,10 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              onPressed: () =>
-                  _abrirTela(const CadastroUsinaScreen(), isWeb, context),
+              onPressed: () => _tentarCriarNovaUsina(
+                isWeb,
+                context,
+              ), // <-- CHAMA A VALIDAÇÃO
             ),
     );
   }
@@ -165,8 +222,10 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                   ),
                 ),
                 ElevatedButton.icon(
-                  onPressed: () =>
-                      _abrirTela(const CadastroUsinaScreen(), isWeb, context),
+                  onPressed: () => _tentarCriarNovaUsina(
+                    isWeb,
+                    context,
+                  ), // <-- CHAMA A VALIDAÇÃO
                   icon: const Icon(Icons.add),
                   label: const Text('Nova Unidade'),
                   style: ElevatedButton.styleFrom(
@@ -398,40 +457,25 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                         size: 24,
                       ),
                     ),
-                    Row(
-                      children: [
-                        if (!usina.ativa) ...[
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: const Text(
-                              'Arquivada',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.red,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                        ],
-                        IconButton(
-                          icon: const Icon(Icons.edit_outlined, size: 20),
-                          color: Colors.grey.shade500,
-                          onPressed: () => _abrirTela(
-                            CadastroUsinaScreen(usinaParaEditar: usina),
-                            isWeb,
-                            context,
+                    if (!usina.ativa)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.red.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'Arquivada',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.red,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                      ],
-                    ),
+                      ),
                   ],
                 ),
                 Column(
@@ -584,14 +628,6 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                   ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.edit_outlined, color: Colors.grey),
-                onPressed: () => _abrirTela(
-                  CadastroUsinaScreen(usinaParaEditar: usina),
-                  isWeb,
-                  context,
-                ),
-              ),
             ],
           ),
         ),
@@ -619,8 +655,10 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
             const SizedBox(height: 8),
             if (!isWeb)
               ElevatedButton.icon(
-                onPressed: () =>
-                    _abrirTela(const CadastroUsinaScreen(), isWeb, context),
+                onPressed: () => _tentarCriarNovaUsina(
+                  isWeb,
+                  context,
+                ), // <-- CHAMA A VALIDAÇÃO AQUI TAMBÉM
                 icon: const Icon(Icons.add),
                 label: const Text('Nova Unidade'),
                 style: ElevatedButton.styleFrom(

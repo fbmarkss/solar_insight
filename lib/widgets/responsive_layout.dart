@@ -108,11 +108,21 @@ class ResponsiveLayout extends StatelessWidget {
       child: Column(
         children: [
           // =========================================================
-          // LOGO E TÍTULO (Com Anti-Aliasing e Corte de Borda Fantasma)
+          // LOGO E TÍTULO (Com Degradê Azul)
           // =========================================================
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 32),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  const Color.fromARGB(255, 6, 153, 252),
+                  const Color.fromARGB(255, 162, 213, 243),
+                ], // Degradê Azul
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -139,7 +149,8 @@ class ResponsiveLayout extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w900,
-                    color: Colors.black87,
+                    color: Colors
+                        .white, // Fonte branca para destacar no fundo azul
                     letterSpacing: 0.5,
                   ),
                 ),

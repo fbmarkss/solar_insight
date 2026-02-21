@@ -1,5 +1,5 @@
 // Caminho: lib/screens/lancamento_mensal_screen.dart
-// Descrição: Tela de Lançamento COMPLETA com UI Premium, Calculadora Inteligente e Lógica Dinâmica (Geradora/Beneficiária).
+// Descrição: Tela de Lançamento COMPLETA com UI Mutante (Modo Simples vs Modo IA).
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +13,7 @@ import '../utils/app_feedback.dart';
 import '../services/logger_service.dart';
 import '../services/sync_queue_service.dart';
 import 'cadastro_usina_screen.dart';
+import 'importacao_ia_screen.dart';
 
 class LancamentoMensalScreen extends StatefulWidget {
   final Usina? usinaPreSelecionada;
@@ -32,16 +33,26 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   final _formKey = GlobalKey<FormState>();
   final _logger = LoggerService();
 
-  // Controladores
+  // Controladores Visíveis (Modo Simples)
   final _leituraAnteriorController = TextEditingController();
   final _leituraAtualController = TextEditingController();
   final _geracaoController = TextEditingController();
   final _injetadaController = TextEditingController();
   final _consumoController = TextEditingController();
-  final _tarifaController = TextEditingController();
+  final _tarifaController = TextEditingController(); // Usado só no manual
   final _custoDemandaController = TextEditingController();
   final _valorFaturaController = TextEditingController();
   final _saldoAcumuladoController = TextEditingController();
+
+  // --- VARIÁVEIS DE ESTADO (MODO IA) ---
+  bool _temDadosAvancados = false;
+  String? _grupoTarifario;
+  String? _modalidadeTarifaria;
+  double _teUnica = 0, _tusdUnica = 0;
+  double _tePonta = 0, _tusdPonta = 0, _teForaPonta = 0, _tusdForaPonta = 0;
+  double _multaReativo = 0, _custoIluminacaoPublica = 0;
+  double _consumoPonta = 0, _consumoForaPonta = 0, _consumoReservado = 0;
+  double _injetadaPonta = 0, _injetadaForaPonta = 0, _injetadaReservada = 0;
 
   Usina? _usinaSelecionada;
   DateTime _dataReferencia = DateTime.now();
@@ -49,7 +60,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   String? _avisoDuplicidade;
   bool _isEditando = false;
 
-  // --- CONTROLE DE PERMISSÕES ---
   bool _isAdmin = false;
   String _currentUid = '';
 
@@ -96,9 +106,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
             .doc(_currentUid)
             .get();
         if (mounted) {
-          setState(() {
-            _isAdmin = doc.data()?['role'] == 'admin';
-          });
+          setState(() => _isAdmin = doc.data()?['role'] == 'admin');
         }
       } catch (e) {
         debugPrint("Erro ao carregar permissões: $e");
@@ -112,22 +120,45 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
 
     try {
       _usinaSelecionada = boxUsinas.values.firstWhere((u) => u.id == l.usinaId);
-    } catch (e) {
-      debugPrint("Usina não encontrada localmente.");
-    }
+    } catch (_) {}
 
     _dataReferencia = l.dataReferencia;
     _geracaoController.text = _formatarParaBR(l.geracaoTotalKwh);
     _injetadaController.text = _formatarParaBR(l.energiaInjetadaKwh);
     _consumoController.text = _formatarParaBR(l.energiaConsumidaRedeKwh);
     _valorFaturaController.text = _formatarParaBR(l.valorFaturaR);
-    _custoDemandaController.text = _formatarParaBR(l.custoDemandaR);
 
-    _tarifaController.text = NumberFormat.currency(
-      locale: 'pt_BR',
-      symbol: '',
-      decimalDigits: 4,
-    ).format(l.tarifaKwh).trim();
+    if ((l.tarifaTeUnica ?? 0) > 0 || (l.tarifaTeForaPonta ?? 0) > 0) {
+      _temDadosAvancados = true;
+      _grupoTarifario = l.grupoTarifario;
+      _modalidadeTarifaria = l.modalidadeTarifaria;
+      _teUnica = l.tarifaTeUnica ?? 0;
+      _tusdUnica = l.tarifaTusdUnica ?? 0;
+      _tePonta = l.tarifaTePonta ?? 0;
+      _tusdPonta = l.tarifaTusdPonta ?? 0;
+      _teForaPonta = l.tarifaTeForaPonta ?? 0;
+      _tusdForaPonta = l.tarifaTusdForaPonta ?? 0;
+      _multaReativo = l.multaReativo ?? 0;
+      _custoIluminacaoPublica = l.custoIluminacaoPublica ?? 0;
+
+      _consumoPonta = l.consumoPonta ?? 0;
+      _consumoForaPonta = l.consumoForaPonta ?? 0;
+      _consumoReservado = l.consumoReservado ?? 0;
+      _injetadaPonta = l.injetadaPonta ?? 0;
+      _injetadaForaPonta = l.injetadaForaPonta ?? 0;
+      _injetadaReservada = l.injetadaReservada ?? 0;
+
+      _custoDemandaController.text = _formatarParaBR(
+        l.custoDemandaR + _custoIluminacaoPublica,
+      );
+    } else {
+      _tarifaController.text = NumberFormat.currency(
+        locale: 'pt_BR',
+        symbol: '',
+        decimalDigits: 4,
+      ).format(l.tarifaKwh).trim();
+      _custoDemandaController.text = _formatarParaBR(l.custoDemandaR);
+    }
 
     if (l.leituraInversor != null && l.leituraInversor! > 0) {
       _leituraAtualController.text = _formatarParaBR(l.leituraInversor!);
@@ -153,7 +184,9 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         .get();
     final bool isAdminBackend = userDoc.data()?['role'] == 'admin';
 
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
 
     if (!isAdminBackend && l.criadoPor != _currentUid) {
       AppFeedback.show(
@@ -245,7 +278,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
                   onPressed: () async {
                     final agora = DateTime.now();
                     l.isDeletado = true;
-
                     l.ultimaModificacao = agora;
                     l.ultimaSincronizacao = agora;
 
@@ -258,8 +290,8 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
                     );
 
                     if (context.mounted) {
-                      Navigator.pop(context); // Fecha o Modal
-                      Navigator.pop(context); // Fecha a Tela
+                      Navigator.pop(context);
+                      Navigator.pop(context);
                       AppFeedback.show(
                         context,
                         'Lançamento movido para a lixeira.',
@@ -299,7 +331,9 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   }
 
   double _converterParaDouble(String texto) {
-    if (texto.isEmpty) return 0.0;
+    if (texto.isEmpty) {
+      return 0.0;
+    }
     String apenasNumeros = texto.replaceAll(RegExp(r'[^\d,]'), '');
     String formatoUS = apenasNumeros.replaceAll('.', '').replaceAll(',', '.');
     return double.tryParse(formatoUS) ?? 0.0;
@@ -315,7 +349,9 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   }
 
   void _buscarLeituraAnterior() {
-    if (_usinaSelecionada == null || _isEditando) return;
+    if (_usinaSelecionada == null || _isEditando) {
+      return;
+    }
     final box = Hive.box<LancamentoMensal>('lancamentos');
     final lancamentos = box.values
         .where(
@@ -355,7 +391,9 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   }
 
   void _verificarDuplicidade() {
-    if (_usinaSelecionada == null || _isEditando) return;
+    if (_usinaSelecionada == null || _isEditando) {
+      return;
+    }
     final box = Hive.box<LancamentoMensal>('lancamentos');
     final existe = box.values.any(
       (l) =>
@@ -376,10 +414,17 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       AppFeedback.show(context, 'Selecione uma Usina.', isError: true);
       return;
     }
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
 
-    double tarifa = _converterParaDouble(_tarifaController.text);
-    if (!_tarifaController.text.contains(',')) tarifa = tarifa / 10000;
+    double tarifa = 0;
+    if (!_temDadosAvancados) {
+      tarifa = _converterParaDouble(_tarifaController.text);
+      if (!_tarifaController.text.contains(',')) {
+        tarifa = tarifa / 10000;
+      }
+    }
 
     double? saldoInformado;
     if (_saldoAcumuladoController.text.isNotEmpty) {
@@ -389,11 +434,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
     final DateTime agora = DateTime.now();
 
-    // -------------------------------------------------------------------------
-    // FALLBACK INTELIGENTE PARA BENEFICIÁRIAS
-    // Se o usuário salvar uma Beneficiária sem preencher os créditos,
-    // o app faz a matemática sozinho usando os dados da Mãe.
-    // -------------------------------------------------------------------------
     double injetadaTratada = _converterParaDouble(_injetadaController.text);
 
     if (!_usinaSelecionada!.isGeradora && injetadaTratada == 0.0) {
@@ -421,30 +461,49 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         } catch (_) {}
       }
     }
-    // -------------------------------------------------------------------------
 
     if (_isEditando) {
       final l = widget.lancamentoParaEditar!;
       l.usinaId = _usinaSelecionada!.id;
       l.dataReferencia = _dataReferencia;
-
       l.geracaoTotalKwh = _usinaSelecionada!.isGeradora
           ? _converterParaDouble(_geracaoController.text)
           : 0.0;
       l.leituraInversor = _usinaSelecionada!.isGeradora
           ? _converterParaDouble(_leituraAtualController.text)
           : null;
-
-      l.energiaInjetadaKwh = injetadaTratada; // <-- USA O VALOR TRATADO AQUI
+      l.energiaInjetadaKwh = injetadaTratada;
       l.energiaConsumidaRedeKwh = _converterParaDouble(_consumoController.text);
       l.tarifaKwh = tarifa;
       l.valorFaturaR = _converterParaDouble(_valorFaturaController.text);
-      l.custoDemandaR = _converterParaDouble(_custoDemandaController.text);
+
+      if (!_temDadosAvancados) {
+        l.custoDemandaR = _converterParaDouble(_custoDemandaController.text);
+      }
       l.saldoInformadoNaFatura = saldoInformado;
+
+      if (_temDadosAvancados) {
+        l.grupoTarifario = _grupoTarifario;
+        l.modalidadeTarifaria = _modalidadeTarifaria;
+        l.consumoPonta = _consumoPonta;
+        l.consumoForaPonta = _consumoForaPonta;
+        l.consumoReservado = _consumoReservado;
+        l.injetadaPonta = _injetadaPonta;
+        l.injetadaForaPonta = _injetadaForaPonta;
+        l.injetadaReservada = _injetadaReservada;
+        l.tarifaTeUnica = _teUnica;
+        l.tarifaTusdUnica = _tusdUnica;
+        l.tarifaTePonta = _tePonta;
+        l.tarifaTusdPonta = _tusdPonta;
+        l.tarifaTeForaPonta = _teForaPonta;
+        l.tarifaTusdForaPonta = _tusdForaPonta;
+        l.custoIluminacaoPublica = _custoIluminacaoPublica;
+        l.multaReativo = _multaReativo;
+      }
+
       l.ultimaModificacao = agora;
       l.editadoPor = _currentUid;
       await l.save();
-
       await SyncQueueService.enqueue('lancamentos', l.id);
 
       await _logger.logAction(
@@ -458,11 +517,13 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         geracaoTotalKwh: _usinaSelecionada!.isGeradora
             ? _converterParaDouble(_geracaoController.text)
             : 0.0,
-        energiaInjetadaKwh: injetadaTratada, // <-- USA O VALOR TRATADO AQUI
+        energiaInjetadaKwh: injetadaTratada,
         energiaConsumidaRedeKwh: _converterParaDouble(_consumoController.text),
         tarifaKwh: tarifa,
         valorFaturaR: _converterParaDouble(_valorFaturaController.text),
-        custoDemandaR: _converterParaDouble(_custoDemandaController.text),
+        custoDemandaR: _temDadosAvancados
+            ? 0.0
+            : _converterParaDouble(_custoDemandaController.text),
         leituraInversor: _usinaSelecionada!.isGeradora
             ? _converterParaDouble(_leituraAtualController.text)
             : null,
@@ -471,6 +532,24 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         criadoPor: _currentUid,
         ultimaModificacao: agora,
         isDeletado: false,
+        grupoTarifario: _temDadosAvancados ? _grupoTarifario : null,
+        modalidadeTarifaria: _temDadosAvancados ? _modalidadeTarifaria : null,
+        consumoPonta: _temDadosAvancados ? _consumoPonta : null,
+        consumoForaPonta: _temDadosAvancados ? _consumoForaPonta : null,
+        consumoReservado: _temDadosAvancados ? _consumoReservado : null,
+        injetadaPonta: _temDadosAvancados ? _injetadaPonta : null,
+        injetadaForaPonta: _temDadosAvancados ? _injetadaForaPonta : null,
+        injetadaReservada: _temDadosAvancados ? _injetadaReservada : null,
+        tarifaTeUnica: _temDadosAvancados ? _teUnica : null,
+        tarifaTusdUnica: _temDadosAvancados ? _tusdUnica : null,
+        tarifaTePonta: _temDadosAvancados ? _tePonta : null,
+        tarifaTusdPonta: _temDadosAvancados ? _tusdPonta : null,
+        tarifaTeForaPonta: _temDadosAvancados ? _teForaPonta : null,
+        tarifaTusdForaPonta: _temDadosAvancados ? _tusdForaPonta : null,
+        custoIluminacaoPublica: _temDadosAvancados
+            ? _custoIluminacaoPublica
+            : null,
+        multaReativo: _temDadosAvancados ? _multaReativo : null,
       );
 
       await boxLancamentos.add(novoLancamento);
@@ -482,7 +561,9 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       );
     }
 
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     AppFeedback.show(context, 'Dados salvos!');
     if (_manterNaTela && !_isEditando) {
       setState(() {
@@ -493,6 +574,9 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         _consumoController.clear();
         _valorFaturaController.clear();
         _saldoAcumuladoController.clear();
+
+        _temDadosAvancados = false;
+
         _dataReferencia = DateTime(
           _dataReferencia.year,
           _dataReferencia.month + 1,
@@ -608,10 +692,152 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     );
   }
 
+  // --- O PAINEL MUTANTE DA IA (UI EXCLUSIVA) ---
+  Widget _buildPainelAuditoriaIA() {
+    final fmtMoeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
+    final fmtTarifa = NumberFormat.currency(
+      locale: 'pt_BR',
+      symbol: 'R\$',
+      decimalDigits: 4,
+    );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.blue.shade200, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.withValues(alpha: 0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_awesome, color: Colors.blue.shade700, size: 24),
+              const SizedBox(width: 8),
+              Text(
+                'AUDITORIA TARIFÁRIA (IA)',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade800,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  'Grupo ${_grupoTarifario ?? "-"}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade900,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          if (_grupoTarifario == 'B') ...[
+            _buildLinhaAuditoria(
+              'Tarifa Energia (TE)',
+              fmtTarifa.format(_teUnica),
+              Icons.bolt,
+            ),
+            _buildLinhaAuditoria(
+              'Tarifa Fio B (TUSD)',
+              fmtTarifa.format(_tusdUnica),
+              Icons.electrical_services,
+            ),
+          ] else ...[
+            _buildLinhaAuditoria(
+              'TE (Ponta / Fora)',
+              '${fmtTarifa.format(_tePonta)} / ${fmtTarifa.format(_teForaPonta)}',
+              Icons.bolt,
+            ),
+            _buildLinhaAuditoria(
+              'TUSD (Ponta / Fora)',
+              '${fmtTarifa.format(_tusdPonta)} / ${fmtTarifa.format(_tusdForaPonta)}',
+              Icons.electrical_services,
+            ),
+          ],
+
+          const Divider(height: 24),
+          _buildLinhaAuditoria(
+            'Demanda / CIP',
+            fmtMoeda.format(_custoIluminacaoPublica),
+            Icons.lightbulb_outline,
+          ),
+
+          if (_multaReativo > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: _buildLinhaAuditoria(
+                'Multa (Reativo/Excedente)',
+                fmtMoeda.format(_multaReativo),
+                Icons.warning_amber_rounded,
+                corDestaque: Colors.red,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLinhaAuditoria(
+    String label,
+    String valor,
+    IconData icon, {
+    Color? corDestaque,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: corDestaque ?? Colors.blueGrey),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: corDestaque ?? Colors.blueGrey.shade700,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          Text(
+            valor,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: corDestaque ?? Colors.black87,
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     bool isWeb = MediaQuery.of(context).size.width >= 900;
-    bool isGeradora = _usinaSelecionada?.isGeradora ?? true; // Padrão é mostrar
+    bool isGeradora = _usinaSelecionada?.isGeradora ?? true;
 
     final boxUsinas = Hive.box<Usina>('usinas');
     final listaUsinas = boxUsinas.values
@@ -668,6 +894,101 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
           children: [
+            if (!_isEditando) ...[
+              GestureDetector(
+                onTap: () async {
+                  final dadosExtraidos = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ImportacaoIaScreen(
+                        usinaSelecionada: _usinaSelecionada,
+                      ),
+                    ),
+                  );
+                  if (dadosExtraidos != null &&
+                      dadosExtraidos is Map<String, dynamic>) {
+                    _preencherDadosDaIA(dadosExtraidos);
+                  }
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 24),
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF2C3E50), Color(0xFF3498DB)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.blue.withValues(alpha: 0.3),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.auto_awesome,
+                          color: Colors.amberAccent,
+                          size: 28,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Importação Inteligente',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Envie o PDF e deixe a IA preencher tudo.',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.amber,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'PRO',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
             _buildSectionTitle('Contexto', Icons.place),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -760,7 +1081,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
             ),
             if (_avisoDuplicidade != null) _buildAviso(_avisoDuplicidade!),
 
-            // --- NOVO BLOCO DO INVERSOR (SÓ MOSTRA SE FOR GERADORA) ---
             if (isGeradora) ...[
               const SizedBox(height: 30),
               _buildSectionTitle('Leitura do Inversor (E-Total)', Icons.speed),
@@ -770,7 +1090,22 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
             const SizedBox(height: 30),
             _buildSectionTitle('Dados da Fatura (Conta)', Icons.receipt_long),
 
-            // --- NOME DINÂMICO PARA ENERGIA INJETADA/RECEBIDA ---
+            // --- A MÁGICA DA INTERFACE MUTANTE ---
+            if (_temDadosAvancados)
+              _buildPainelAuditoriaIA()
+            else ...[
+              _buildStylishField(
+                controller: _tarifaController,
+                label: 'Tarifa (Média)',
+                hint: '0,0000',
+                icon: Icons.price_check,
+                isTarifa: true,
+                onCalculatorTap: _abrirAssistenteTarifa,
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // -------------------------------------
             _buildStylishField(
               controller: _injetadaController,
               label: isGeradora
@@ -781,7 +1116,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
               isKwh: true,
               suffix: 'kWh',
             ),
-
             const SizedBox(height: 12),
             _buildStylishField(
               controller: _consumoController,
@@ -792,24 +1126,19 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
               suffix: 'kWh',
             ),
             const SizedBox(height: 12),
-            _buildStylishField(
-              controller: _tarifaController,
-              label: 'Tarifa (Média)',
-              hint: '0,0000',
-              icon: Icons.price_check,
-              isTarifa: true,
-              onCalculatorTap: _abrirAssistenteTarifa,
-            ),
-            const SizedBox(height: 12),
-            _buildStylishField(
-              controller: _custoDemandaController,
-              label: 'Custo de Demanda / Fixos',
-              hint: '0,00',
-              icon: Icons.domain,
-              isMoeda: true,
-              suffix: 'R\$',
-            ),
-            const SizedBox(height: 12),
+
+            if (!_temDadosAvancados) ...[
+              _buildStylishField(
+                controller: _custoDemandaController,
+                label: 'Custo de Demanda / Fixos',
+                hint: '0,00',
+                icon: Icons.domain,
+                isMoeda: true,
+                suffix: 'R\$',
+              ),
+              const SizedBox(height: 12),
+            ],
+
             _buildStylishField(
               controller: _valorFaturaController,
               label: 'Valor Total da Fatura (Pago)',
@@ -856,7 +1185,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
               ),
             const SizedBox(height: 30),
 
-            // PADRÃO WEB E MOBILE: BOTÕES INFERIORES
             Row(
               children: [
                 if (isWeb) ...[
@@ -914,7 +1242,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     );
   }
 
-  // --- UI PREMIUM: CARD DA LEITURA DO INVERSOR ---
   Widget _buildLeituraInversorCard() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -938,22 +1265,18 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
             icon: Icons.history,
             isFirst: true,
           ),
-
-          // Seta / Linha do Tempo
           Row(
             children: [
-              const SizedBox(width: 22), // Alinha com o meio do ícone
+              const SizedBox(width: 22),
               Container(height: 24, width: 2, color: Colors.grey.shade300),
             ],
           ),
-
           _buildTimelineInput(
             controller: _leituraAtualController,
             label: 'Leitura Final (Atual)',
             icon: Icons.speed,
             isFirst: false,
           ),
-
           const SizedBox(height: 20),
           _buildGeracaoCalculada(),
         ],
@@ -961,7 +1284,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     );
   }
 
-  // --- SUBCOMPONENTE DA LINHA DO TEMPO DO INVERSOR ---
   Widget _buildTimelineInput({
     required TextEditingController controller,
     required String label,
@@ -1022,13 +1344,9 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     );
   }
 
-  // --- CALCULADORA DE GERAÇÃO EM DESTAQUE (CORRIGIDA PARA OVERFLOW) ---
   Widget _buildGeracaoCalculada() {
     return Container(
-      padding: const EdgeInsets.symmetric(
-        vertical: 16,
-        horizontal: 16,
-      ), // Padding ajustado
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [Colors.orange.shade400, Colors.deepOrange.shade500],
@@ -1234,16 +1552,103 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       ),
     ),
   );
+
+  void _preencherDadosDaIA(Map<String, dynamic> json) {
+    try {
+      final dadosGerais = json['dadosGerais'] ?? {};
+      final energia = json['energiaKwh'] ?? {};
+      final consumo = energia['consumo'] ?? {};
+      final injetada = energia['injetada'] ?? {};
+      final tarifas = json['tarifasReaisPorKwh'] ?? {};
+      final custos = json['custosAdicionaisReais'] ?? {};
+
+      setState(() {
+        _temDadosAvancados = true;
+        _grupoTarifario = dadosGerais['grupoTarifario'];
+        _modalidadeTarifaria = dadosGerais['modalidade'];
+
+        _teUnica = (tarifas['teUnica'] as num?)?.toDouble() ?? 0;
+        _tusdUnica = (tarifas['tusdUnica'] as num?)?.toDouble() ?? 0;
+        _tePonta = (tarifas['tePonta'] as num?)?.toDouble() ?? 0;
+        _tusdPonta = (tarifas['tusdPonta'] as num?)?.toDouble() ?? 0;
+        _teForaPonta = (tarifas['teForaPonta'] as num?)?.toDouble() ?? 0;
+        _tusdForaPonta = (tarifas['tusdForaPonta'] as num?)?.toDouble() ?? 0;
+
+        _custoIluminacaoPublica =
+            (custos['iluminacaoPublica'] as num?)?.toDouble() ?? 0;
+        _multaReativo = (custos['multaReativo'] as num?)?.toDouble() ?? 0;
+
+        _consumoPonta = (consumo['ponta'] as num?)?.toDouble() ?? 0;
+        _consumoForaPonta = (consumo['foraPonta'] as num?)?.toDouble() ?? 0;
+        _consumoReservado = (consumo['reservado'] as num?)?.toDouble() ?? 0;
+
+        _injetadaPonta = (injetada['ponta'] as num?)?.toDouble() ?? 0;
+        _injetadaForaPonta = (injetada['foraPonta'] as num?)?.toDouble() ?? 0;
+        _injetadaReservada = (injetada['reservado'] as num?)?.toDouble() ?? 0;
+
+        String mesRef = dadosGerais['mesReferencia'] ?? '';
+        if (mesRef.contains('/')) {
+          List<String> parts = mesRef.split('/');
+          int mes = int.tryParse(parts[0]) ?? _dataReferencia.month;
+          int ano = int.tryParse(parts[1]) ?? _dataReferencia.year;
+          if (ano < 100) {
+            ano += 2000;
+          }
+          _dataReferencia = DateTime(ano, mes, 1);
+        }
+
+        double valorFatura =
+            (dadosGerais['valorTotalFatura'] as num?)?.toDouble() ?? 0.0;
+        if (valorFatura > 0) {
+          _valorFaturaController.text = _formatarParaBR(valorFatura);
+        }
+
+        double totalConsumo =
+            ((consumo['unico'] as num?)?.toDouble() ?? 0.0) +
+            _consumoPonta +
+            _consumoForaPonta +
+            _consumoReservado;
+        if (totalConsumo > 0) {
+          _consumoController.text = _formatarParaBR(totalConsumo);
+        }
+
+        double totalInjetada =
+            ((injetada['unico'] as num?)?.toDouble() ?? 0.0) +
+            _injetadaPonta +
+            _injetadaForaPonta +
+            _injetadaReservada;
+        if (totalInjetada > 0) {
+          _injetadaController.text = _formatarParaBR(totalInjetada);
+        }
+
+        double demanda = (custos['demanda'] as num?)?.toDouble() ?? 0.0;
+        if (demanda > 0) {
+          _custoDemandaController.text = _formatarParaBR(demanda);
+        }
+
+        double saldo =
+            (dadosGerais['saldoCreditosAcumuladosKwh'] as num?)?.toDouble() ??
+            0.0;
+        if (saldo > 0) {
+          _saldoAcumuladoController.text = _formatarParaBR(saldo);
+        }
+      });
+    } catch (e) {
+      debugPrint("Erro IA: $e");
+      AppFeedback.show(context, 'Erro ao preencher dados.', isError: true);
+    }
+  }
 }
 
-// CLASSES FORMATADORAS (MANTIDAS)
 class CurrencyInputFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    if (newValue.text.isEmpty) return newValue.copyWith(text: '');
+    if (newValue.text.isEmpty) {
+      return newValue.copyWith(text: '');
+    }
     double value =
         double.parse(newValue.text.replaceAll(RegExp(r'[^\d]'), '')) / 100;
     String newText = NumberFormat.currency(
@@ -1263,7 +1668,9 @@ class KwhInputFormatter extends TextInputFormatter {
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    if (newValue.text.isEmpty) return newValue.copyWith(text: '');
+    if (newValue.text.isEmpty) {
+      return newValue.copyWith(text: '');
+    }
     double value =
         double.parse(newValue.text.replaceAll(RegExp(r'[^\d]'), '')) / 100;
     String newText = NumberFormat.decimalPattern('pt_BR').format(value);
@@ -1285,7 +1692,9 @@ class TarifaInputFormatter extends TextInputFormatter {
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    if (newValue.text.isEmpty) return newValue.copyWith(text: '');
+    if (newValue.text.isEmpty) {
+      return newValue.copyWith(text: '');
+    }
     double value =
         double.parse(newValue.text.replaceAll(RegExp(r'[^\d]'), '')) / 10000;
     String newText = NumberFormat.currency(

@@ -1,84 +1,89 @@
 // Caminho: lib/models/lancamento.dart
-// Descrição: Modelo de lançamento mensal (Geração/Fatura).
-// Status: COMPLETO (Implementa SyncableModel, criadoPor e Conciliação de Saldo).
+// Descrição: Modelo de lançamento mensal.
+// Status: COMPLETO (Preparado para IA e Sincronização Padronizada).
 
 import 'package:hive/hive.dart';
 import '../interfaces/syncable_model.dart';
 
 @HiveType(typeId: 1)
 class LancamentoMensal extends HiveObject implements SyncableModel {
-  // --- CAMPOS FUNCIONAIS ---
   @HiveField(0)
   String usinaId;
-
   @HiveField(1)
   DateTime dataReferencia;
-
   @HiveField(2)
   double geracaoTotalKwh;
-
   @HiveField(3)
   double energiaInjetadaKwh;
-
   @HiveField(4)
   double energiaConsumidaRedeKwh;
-
   @HiveField(5)
   double tarifaKwh;
-
   @HiveField(6)
   double valorFaturaR;
-
   @HiveField(7)
   String? observacao;
-
   @HiveField(8)
   double? leituraInversor;
-
   @HiveField(9)
   double custoDemandaR;
-
-  // --- CAMPOS ESTRUTURAIS DE SYNC (SYNCABLE MODEL) ---
-
-  // 1. IDENTIDADE
   @HiveField(10)
-  String? idRemoto; // ID no Firestore
-
+  String? idRemoto;
   @HiveField(11)
-  String? tenantId; // ID DA EMPRESA (Compartilhamento)
-
-  // 2. CONTROLE DE VERSÃO
+  String? tenantId;
   @HiveField(12)
   @override
   DateTime? ultimaModificacao;
-
-  // 3. SOFT DELETE
   @HiveField(13)
   @override
   bool isDeletado;
-
   @HiveField(14)
   String fonteOrigem;
-
   @HiveField(15)
-  String? editadoPor; // Último usuário que editou
-
-  // 4. IDENTIDADE LOCAL
+  String? editadoPor;
   @HiveField(16)
   @override
   String id;
-
-  // 5. CONTROLE DE SYNC
   @HiveField(17)
   DateTime? ultimaSincronizacao;
-
-  // 6. AUTORIA
   @HiveField(18)
-  String? criadoPor; // Usuário criador original (Permissão de Exclusão)
-
-  // 7. CONCILIAÇÃO BANCÁRIA (NOVO)
+  String? criadoPor;
   @HiveField(19)
-  double? saldoInformadoNaFatura; // Saldo oficial vindo da conta para corrigir a rota do App
+  double? saldoInformadoNaFatura;
+
+  // --- CAMPOS IA ---
+  @HiveField(20)
+  String? grupoTarifario;
+  @HiveField(21)
+  String? modalidadeTarifaria;
+  @HiveField(22)
+  double? consumoPonta;
+  @HiveField(23)
+  double? consumoForaPonta;
+  @HiveField(24)
+  double? consumoReservado;
+  @HiveField(25)
+  double? injetadaPonta;
+  @HiveField(26)
+  double? injetadaForaPonta;
+  @HiveField(27)
+  double? injetadaReservada;
+  @HiveField(28)
+  double? tarifaTeUnica;
+  @HiveField(29)
+  double? tarifaTusdUnica;
+  @HiveField(30)
+  double? tarifaTePonta;
+  @HiveField(31)
+  double? tarifaTusdPonta;
+  @HiveField(32)
+  double? tarifaTeForaPonta;
+  @HiveField(33)
+  double? tarifaTusdForaPonta;
+  @HiveField(34)
+  double? custoIluminacaoPublica;
+  @HiveField(35)
+  double? multaReativo;
 
   LancamentoMensal({
     required this.usinaId,
@@ -100,24 +105,35 @@ class LancamentoMensal extends HiveObject implements SyncableModel {
     String? id,
     this.ultimaSincronizacao,
     this.criadoPor,
-    this.saldoInformadoNaFatura, // NOVO
+    this.saldoInformadoNaFatura,
+    this.grupoTarifario,
+    this.modalidadeTarifaria,
+    this.consumoPonta,
+    this.consumoForaPonta,
+    this.consumoReservado,
+    this.injetadaPonta,
+    this.injetadaForaPonta,
+    this.injetadaReservada,
+    this.tarifaTeUnica,
+    this.tarifaTusdUnica,
+    this.tarifaTePonta,
+    this.tarifaTusdPonta,
+    this.tarifaTeForaPonta,
+    this.tarifaTusdForaPonta,
+    this.custoIluminacaoPublica,
+    this.multaReativo,
   }) : id =
            id ??
-           // Gerador de ID simples: Timestamp + Hash da Usina
            DateTime.now().millisecondsSinceEpoch.toString() +
                usinaId.hashCode.toString();
-
-  // --- GETTERS AUXILIARES ---
 
   double get saldoEnergeticoKwh => energiaInjetadaKwh - energiaConsumidaRedeKwh;
   double get economiaEstimadaR => (geracaoTotalKwh * tarifaKwh);
 
-  // --- CONVERSÃO JSON (OBRIGATÓRIO PELA INTERFACE) ---
-
   @override
   Map<String, dynamic> toMap() {
     return {
-      'id': id, // ID Local
+      'id': id,
       'usinaId': usinaId,
       'dataReferencia': dataReferencia.millisecondsSinceEpoch,
       'geracaoTotalKwh': geracaoTotalKwh,
@@ -136,44 +152,27 @@ class LancamentoMensal extends HiveObject implements SyncableModel {
       'editadoPor': editadoPor,
       'ultimaSincronizacao': ultimaSincronizacao?.millisecondsSinceEpoch,
       'criadoPor': criadoPor,
-      'saldoInformadoNaFatura': saldoInformadoNaFatura, // NOVO
+      'saldoInformadoNaFatura': saldoInformadoNaFatura,
+      'grupoTarifario': grupoTarifario,
+      'modalidadeTarifaria': modalidadeTarifaria,
+      'consumoPonta': consumoPonta,
+      'consumoForaPonta': consumoForaPonta,
+      'consumoReservado': consumoReservado,
+      'injetadaPonta': injetadaPonta,
+      'injetadaForaPonta': injetadaForaPonta,
+      'injetadaReservada': injetadaReservada,
+      'tarifaTeUnica': tarifaTeUnica,
+      'tarifaTusdUnica': tarifaTusdUnica,
+      'tarifaTePonta': tarifaTePonta,
+      'tarifaTusdPonta': tarifaTusdPonta,
+      'tarifaTeForaPonta': tarifaTeForaPonta,
+      'tarifaTusdForaPonta': tarifaTusdForaPonta,
+      'custoIluminacaoPublica': custoIluminacaoPublica,
+      'multaReativo': multaReativo,
     };
-  }
-
-  // Factory para criar a partir do JSON
-  factory LancamentoMensal.fromMap(Map<String, dynamic> map) {
-    return LancamentoMensal(
-      id: map['id'],
-      usinaId: map['usinaId'] ?? '',
-      dataReferencia: DateTime.fromMillisecondsSinceEpoch(
-        map['dataReferencia'] ?? DateTime.now().millisecondsSinceEpoch,
-      ),
-      geracaoTotalKwh: (map['geracaoTotalKwh'] as num?)?.toDouble() ?? 0.0,
-      energiaInjetadaKwh:
-          (map['energiaInjetadaKwh'] as num?)?.toDouble() ?? 0.0,
-      energiaConsumidaRedeKwh:
-          (map['energiaConsumidaRedeKwh'] as num?)?.toDouble() ?? 0.0,
-      tarifaKwh: (map['tarifaKwh'] as num?)?.toDouble() ?? 0.0,
-      valorFaturaR: (map['valorFaturaR'] as num?)?.toDouble() ?? 0.0,
-      observacao: map['observacao'],
-      leituraInversor: (map['leituraInversor'] as num?)?.toDouble(),
-      custoDemandaR: (map['custoDemandaR'] as num?)?.toDouble() ?? 0.0,
-      idRemoto: map['idRemoto'],
-      tenantId: map['tenantId'],
-      ultimaModificacao: map['ultimaModificacao'] != null
-          ? DateTime.fromMillisecondsSinceEpoch(map['ultimaModificacao'])
-          : null,
-      isDeletado: map['isDeletado'] ?? false,
-      fonteOrigem: map['fonteOrigem'] ?? 'MANUAL',
-      editadoPor: map['editadoPor'],
-      criadoPor: map['criadoPor'],
-      saldoInformadoNaFatura: (map['saldoInformadoNaFatura'] as num?)
-          ?.toDouble(), // NOVO
-    );
   }
 }
 
-// --- ADAPTADOR MANUAL ATUALIZADO (20 CAMPOS: 0 a 19) ---
 class LancamentoMensalAdapter extends TypeAdapter<LancamentoMensal> {
   @override
   final int typeId = 1;
@@ -216,14 +215,36 @@ class LancamentoMensalAdapter extends TypeAdapter<LancamentoMensal> {
       criadoPor: fields.containsKey(18) ? fields[18] as String? : null,
       saldoInformadoNaFatura: fields.containsKey(19)
           ? fields[19] as double?
-          : null, // NOVO
+          : null,
+      grupoTarifario: fields.containsKey(20) ? fields[20] as String? : null,
+      modalidadeTarifaria: fields.containsKey(21)
+          ? fields[21] as String?
+          : null,
+      consumoPonta: fields.containsKey(22) ? fields[22] as double? : null,
+      consumoForaPonta: fields.containsKey(23) ? fields[23] as double? : null,
+      consumoReservado: fields.containsKey(24) ? fields[24] as double? : null,
+      injetadaPonta: fields.containsKey(25) ? fields[25] as double? : null,
+      injetadaForaPonta: fields.containsKey(26) ? fields[26] as double? : null,
+      injetadaReservada: fields.containsKey(27) ? fields[27] as double? : null,
+      tarifaTeUnica: fields.containsKey(28) ? fields[28] as double? : null,
+      tarifaTusdUnica: fields.containsKey(29) ? fields[29] as double? : null,
+      tarifaTePonta: fields.containsKey(30) ? fields[30] as double? : null,
+      tarifaTusdPonta: fields.containsKey(31) ? fields[31] as double? : null,
+      tarifaTeForaPonta: fields.containsKey(32) ? fields[32] as double? : null,
+      tarifaTusdForaPonta: fields.containsKey(33)
+          ? fields[33] as double?
+          : null,
+      custoIluminacaoPublica: fields.containsKey(34)
+          ? fields[34] as double?
+          : null,
+      multaReativo: fields.containsKey(35) ? fields[35] as double? : null,
     );
   }
 
   @override
   void write(BinaryWriter writer, LancamentoMensal obj) {
     writer
-      ..writeByte(20) // Aumentado para 20 campos (0 a 19)
+      ..writeByte(36)
       ..writeByte(0)
       ..write(obj.usinaId)
       ..writeByte(1)
@@ -262,8 +283,40 @@ class LancamentoMensalAdapter extends TypeAdapter<LancamentoMensal> {
       ..write(obj.ultimaSincronizacao)
       ..writeByte(18)
       ..write(obj.criadoPor)
-      ..writeByte(19) // NOVO CAMPO
-      ..write(obj.saldoInformadoNaFatura);
+      ..writeByte(19)
+      ..write(obj.saldoInformadoNaFatura)
+      ..writeByte(20)
+      ..write(obj.grupoTarifario)
+      ..writeByte(21)
+      ..write(obj.modalidadeTarifaria)
+      ..writeByte(22)
+      ..write(obj.consumoPonta)
+      ..writeByte(23)
+      ..write(obj.consumoForaPonta)
+      ..writeByte(24)
+      ..write(obj.consumoReservado)
+      ..writeByte(25)
+      ..write(obj.injetadaPonta)
+      ..writeByte(26)
+      ..write(obj.injetadaForaPonta)
+      ..writeByte(27)
+      ..write(obj.injetadaReservada)
+      ..writeByte(28)
+      ..write(obj.tarifaTeUnica)
+      ..writeByte(29)
+      ..write(obj.tarifaTusdUnica)
+      ..writeByte(30)
+      ..write(obj.tarifaTePonta)
+      ..writeByte(31)
+      ..write(obj.tarifaTusdPonta)
+      ..writeByte(32)
+      ..write(obj.tarifaTeForaPonta)
+      ..writeByte(33)
+      ..write(obj.tarifaTusdForaPonta)
+      ..writeByte(34)
+      ..write(obj.custoIluminacaoPublica)
+      ..writeByte(35)
+      ..write(obj.multaReativo);
   }
 
   @override

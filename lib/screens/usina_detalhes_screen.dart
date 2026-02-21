@@ -1,6 +1,5 @@
 // Caminho: lib/screens/usina_detalhes_screen.dart
-// Descrição: Dashboard de Performance da Usina.
-// ATUALIZAÇÃO: Card dinâmico (Dados do Sistema vs Perfil de Consumo).
+// Descrição: Dashboard de Performance da Usina (Com Auditoria Visível de Créditos).
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -273,7 +272,17 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                   ),
                   itemCount: todosLancamentos.length,
                   itemBuilder: (context, index) {
-                    return _buildLancamentoCard(todosLancamentos[index]);
+                    LancamentoMensal lanc = todosLancamentos[index];
+                    LancamentoMensal? lancAnterior;
+                    if (index + 1 < todosLancamentos.length) {
+                      lancAnterior = todosLancamentos[index + 1];
+                    }
+                    double desvio = CalculadoraEnergetica.calcularDesvioDoMes(
+                      widget.usina,
+                      lanc,
+                      lancAnterior,
+                    );
+                    return _buildLancamentoCard(lanc, desvio);
                   },
                 ),
               ),
@@ -334,10 +343,24 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
             (sum, l) => sum + l.energiaConsumidaRedeKwh,
           );
 
-          double creditosUsados =
-              metricas.totalInjetadoKwh - metricas.saldoCreditosEstimado;
-          double retidoConcessionaria = totalConsumidoDaRede - creditosUsados;
-          if (retidoConcessionaria < 0) retidoConcessionaria = 0;
+          // --- CORREÇÃO DO CÁLCULO DE RETENÇÃO (BLINDADO CONTRA USINAS ANTIGAS) ---
+          double retidoConcessionaria = 0;
+          double taxaMinima = 100.0; // Trifásico padrão
+          if (widget.usina.tipo.toLowerCase().contains('monof')) {
+            taxaMinima = 30.0;
+          }
+          if (widget.usina.tipo.toLowerCase().contains('bif')) {
+            taxaMinima = 50.0;
+          }
+
+          for (var l in lancamentos) {
+            if (l.energiaConsumidaRedeKwh < taxaMinima) {
+              retidoConcessionaria += l.energiaConsumidaRedeKwh;
+            } else {
+              retidoConcessionaria += taxaMinima;
+            }
+          }
+          // -----------------------------------------------------------------------
 
           Map<String, dynamic> saudeSistema = {};
           double producaoIdeal = 0;
@@ -445,7 +468,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               ),
               const SizedBox(height: 20),
 
-              // --- A MÁGICA ACONTECE AQUI: CARD DINÂMICO ---
               if (widget.usina.isGeradora)
                 _buildDadosTecnicosCard(
                   widget.usina,
@@ -457,7 +479,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                   widget.usina,
                   metricas.mediaConsumo3Meses,
                 ),
-              // ---------------------------------------------
               const SizedBox(height: 20),
 
               if (ultimoLancamento != null)
@@ -497,6 +518,12 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               const SizedBox(height: 12),
               _buildSaldoCreditosCard(metricas.saldoCreditosEstimado),
               const SizedBox(height: 12),
+
+              // --- A MÁGICA 1: O PLACAR DE PREJUÍZO ---
+              if (metricas.totalCreditosDesviados > 0) ...[
+                _buildDesvioCreditosCard(metricas.totalCreditosDesviados),
+                const SizedBox(height: 12),
+              ],
 
               Container(
                 padding: const EdgeInsets.all(20),
@@ -655,7 +682,24 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               if (lancamentosOrdenados.isEmpty)
                 _buildEmptyState()
               else ...[
-                ...ultimos6Lancamentos.map((l) => _buildLancamentoCard(l)),
+                // --- A MÁGICA 2: SELO DE ALERTA NO HISTÓRICO ---
+                ...ultimos6Lancamentos.map((lanc) {
+                  // Acha o mês anterior cronologicamente na lista completa (se existir)
+                  LancamentoMensal? lancAnterior;
+                  int anteriorIdx = lancamentosOrdenados.indexOf(lanc) + 1;
+
+                  if (anteriorIdx < lancamentosOrdenados.length) {
+                    lancAnterior = lancamentosOrdenados[anteriorIdx];
+                  }
+
+                  double desvio = CalculadoraEnergetica.calcularDesvioDoMes(
+                    widget.usina,
+                    lanc,
+                    lancAnterior,
+                  );
+
+                  return _buildLancamentoCard(lanc, desvio);
+                }),
 
                 if (lancamentosOrdenados.length > 6)
                   Padding(
@@ -710,6 +754,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
   void _mostrarDetalhesLancamento(
     BuildContext context,
     LancamentoMensal lancamento,
+    double desvio,
   ) {
     double autoconsumo = 0;
 
@@ -897,9 +942,23 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         const SizedBox(height: 12),
                         if (widget.usina.beneficiarias.isNotEmpty)
                           ...widget.usina.beneficiarias.map((b) {
-                            double qtdEnviada =
-                                lancamento.energiaInjetadaKwh *
-                                (b.percentual / 100);
+                            double qtdEnviada = 0.0;
+                            final boxLanc = Hive.box<LancamentoMensal>(
+                              'lancamentos',
+                            );
+                            try {
+                              final lancFilha = boxLanc.values.firstWhere(
+                                (l) =>
+                                    l.usinaId == b.idUsinaFilha &&
+                                    !l.isDeletado &&
+                                    l.dataReferencia.year ==
+                                        lancamento.dataReferencia.year &&
+                                    l.dataReferencia.month ==
+                                        lancamento.dataReferencia.month,
+                              );
+                              qtdEnviada = lancFilha.energiaInjetadaKwh;
+                            } catch (_) {}
+
                             return _buildDetailRow(
                               '--> ${b.nome} (${b.percentual.toStringAsFixed(0)}%)',
                               '${_numero.format(qtdEnviada)} kWh',
@@ -1145,6 +1204,84 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                           ],
                         ),
                       ),
+
+                      // --- A MÁGICA 3: O QUADRO DE EVIDÊNCIA (AUDITORIA FALHOU) ---
+                      if (desvio > 0) ...[
+                        const Divider(height: 30),
+                        _buildSectionHeader(
+                          'Auditoria de Saldo (FALHOU)',
+                          Icons.policy,
+                        ),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.red.shade300),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(
+                                    Icons.report_problem,
+                                    color: Colors.red,
+                                    size: 20,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Concessionária reteve créditos',
+                                    style: TextStyle(
+                                      color: Colors.red,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Neste mês, você teve uma sobra de energia. Pela matemática física, o seu saldo atualizado na fatura deveria ter somado os créditos, mas a concessionária ignorou.',
+                                style: TextStyle(
+                                  color: Colors.red.shade800,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              _buildDetailRow(
+                                'Desvio Detectado:',
+                                '${_numero.format(desvio)} kWh',
+                                boldValue: true,
+                                colorValue: Colors.red.shade900,
+                              ),
+                              const SizedBox(height: 16),
+                              /* SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    AppFeedback.show(
+                                      context,
+                                      'Recurso em breve: Gerador Automático de Contestação para ANEEL.',
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.picture_as_pdf,
+                                    color: Colors.red,
+                                  ),
+                                  label: const Text(
+                                    'Gerar Prova de Contestação',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    side: const BorderSide(color: Colors.red),
+                                  ),
+                                ),
+                              ), */
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 30),
                     ],
                   ),
@@ -1477,12 +1614,22 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
             ),
             const SizedBox(height: 8),
             ...widget.usina.beneficiarias.map((b) {
-              double enviadoParaEsta =
-                  CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
-                    widget.usina,
-                    ultimoLancamento,
-                    b.idUsinaFilha,
-                  );
+              double enviadoParaEsta = 0.0;
+              try {
+                final lancFilha = Hive.box<LancamentoMensal>('lancamentos')
+                    .values
+                    .firstWhere(
+                      (l) =>
+                          l.usinaId == b.idUsinaFilha &&
+                          !l.isDeletado &&
+                          l.dataReferencia.year ==
+                              ultimoLancamento.dataReferencia.year &&
+                          l.dataReferencia.month ==
+                              ultimoLancamento.dataReferencia.month,
+                    );
+                enviadoParaEsta = lancFilha.energiaInjetadaKwh;
+              } catch (_) {}
+
               return Padding(
                 padding: const EdgeInsets.only(bottom: 6),
                 child: Row(
@@ -1582,6 +1729,50 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     ),
   );
 
+  // --- NOVO CARD DE PREJUÍZO ACUMULADO ---
+  Widget _buildDesvioCreditosCard(double v) => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        colors: [Colors.red.shade600, Colors.red.shade800],
+      ),
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.red.withValues(alpha: 0.3),
+          blurRadius: 10,
+          offset: const Offset(0, 4),
+        ),
+      ],
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        const Row(
+          children: [
+            Icon(Icons.policy, color: Colors.white, size: 20),
+            SizedBox(width: 8),
+            Text(
+              'Créditos Desviados',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        Text(
+          '- ${_numero.format(v)} kWh',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+      ],
+    ),
+  );
+
   Widget _buildCardROI(double p, double i, double r) => Container(
     padding: const EdgeInsets.all(20),
     decoration: BoxDecoration(
@@ -1637,19 +1828,27 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     ),
   );
 
-  Widget _buildLancamentoCard(LancamentoMensal item) => Card(
+  // --- CARD DO HISTÓRICO ATUALIZADO (AGORA RECEBE O DESVIO) ---
+  Widget _buildLancamentoCard(LancamentoMensal item, double desvio) => Card(
     elevation: 0,
     margin: const EdgeInsets.only(bottom: 10),
     color: Colors.white,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: BorderSide(
+        color: desvio > 0 ? Colors.red.shade200 : Colors.transparent,
+      ),
+    ),
     child: ListTile(
-      onTap: () => _mostrarDetalhesLancamento(context, item),
+      onTap: () => _mostrarDetalhesLancamento(context, item, desvio),
       leading: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: Colors.grey.shade50,
+          color: desvio > 0 ? Colors.red.shade50 : Colors.grey.shade50,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(
+            color: desvio > 0 ? Colors.red.shade200 : Colors.grey.shade200,
+          ),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1662,7 +1861,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               ).format(item.dataReferencia).toUpperCase(),
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: Colors.grey.shade800,
+                color: desvio > 0 ? Colors.red.shade800 : Colors.grey.shade800,
                 fontSize: 14,
               ),
             ),
@@ -1670,7 +1869,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               DateFormat('yyyy').format(item.dataReferencia),
               style: TextStyle(
                 fontWeight: FontWeight.w600,
-                color: Colors.grey.shade500,
+                color: desvio > 0 ? Colors.red.shade400 : Colors.grey.shade500,
                 fontSize: 10,
               ),
             ),
@@ -1681,12 +1880,22 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
         '${_numero.format(widget.usina.isGeradora ? item.geracaoTotalKwh : item.energiaConsumidaRedeKwh)} kWh',
         style: const TextStyle(fontWeight: FontWeight.bold),
       ),
-      trailing: Text(
-        _moeda.format(item.valorFaturaR),
-        style: const TextStyle(
-          fontWeight: FontWeight.bold,
-          color: Colors.redAccent,
-        ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (desvio > 0)
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Icon(Icons.warning_amber_rounded, color: Colors.red),
+            ),
+          Text(
+            _moeda.format(item.valorFaturaR),
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.redAccent,
+            ),
+          ),
+        ],
       ),
     ),
   );

@@ -262,12 +262,29 @@ class _ConfiguracoesScreenState extends State<ConfiguracoesScreen> {
           ),
 
           const SizedBox(height: 40),
+
+          // --- RODAPÉ COM NOME E VERSÃO ---
           const Center(
-            child: Text(
-              "SolarInsight v1.0.0 Web/Mobile",
-              style: TextStyle(color: Colors.grey),
+            child: Column(
+              children: [
+                Text(
+                  "SolarInsight v1.0.0 Web/Mobile",
+                  style: TextStyle(color: Colors.grey),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  "by Fabiano Marques",
+                  style: TextStyle(
+                    color: Colors.blueGrey,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
           ),
+
+          // ---------------------------------
         ],
       ),
     );

@@ -1,5 +1,5 @@
 // Caminho: lib/main.dart
-// Descrição: Inicialização Híbrida (Web + Mobile) com Firebase e Hive configurados corretamente.
+// Descrição: Inicialização Híbrida (Web + Mobile) com Firebase, Hive e Providers (incluindo Assinatura e Variáveis de Ambiente) configurados.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // <--- Necessário para verificar se é Web (kIsWeb)
@@ -10,6 +10,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path_provider/path_provider.dart'; // Importante para Mobile
 import 'package:provider/provider.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart'; // <--- NOVO IMPORT PARA O .ENV
 
 // O arquivo abaixo é gerado pelo comando 'flutterfire configure'
 import 'firebase_options.dart';
@@ -17,17 +18,21 @@ import 'firebase_options.dart';
 import 'models/usina.dart';
 import 'models/lancamento.dart';
 import 'services/dashboard_provider.dart';
+import 'services/subscription_provider.dart'; // <--- IMPORT DO GUARDIÃO
 import 'screens/auth/login_screen.dart';
 import 'screens/main_navigation_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 1. Inicializa Firebase com Opções (CRUCIAL PARA WEB)
+  // 1. Carrega as variáveis de ambiente (Chave do Gemini) ANTES de rodar o app
+  await dotenv.load(fileName: ".env");
+
+  // 2. Inicializa Firebase com Opções (CRUCIAL PARA WEB)
   // O DefaultFirebaseOptions detecta se está no Android, iOS ou Web e entrega a chave certa.
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // 2. Inicializa Hive (Lógica Híbrida Web/Mobile)
+  // 3. Inicializa Hive (Lógica Híbrida Web/Mobile)
   if (kIsWeb) {
     // Na Web, o Hive usa o IndexedDB do navegador automaticamente.
     // Não podemos passar "path" aqui, senão dá erro.
@@ -46,19 +51,22 @@ void main() async {
   Hive.registerAdapter(InvestimentoItemAdapter());
   Hive.registerAdapter(BeneficiariaItemAdapter());
 
-  // 3. Abre as Boxes
+  // 4. Abre as Boxes
   // Abrimos todas as caixas necessárias para o app não travar tentando acessar uma fechada.
   await Hive.openBox<Usina>('usinas');
   await Hive.openBox<LancamentoMensal>('lancamentos');
   await Hive.openBox('sync_queue'); // Fila de sincronização
   await Hive.openBox('sync_metadata'); // Controle de datas da última sync
 
-  // 4. Configuração de Localização Brasileira
+  // 5. Configuração de Localização Brasileira
   await initializeDateFormatting('pt_BR', null);
 
   runApp(
     MultiProvider(
-      providers: [ChangeNotifierProvider(create: (_) => DashboardProvider())],
+      providers: [
+        ChangeNotifierProvider(create: (_) => DashboardProvider()),
+        ChangeNotifierProvider(create: (_) => SubscriptionProvider()),
+      ],
       child: const SolarInsightApp(),
     ),
   );
@@ -97,7 +105,7 @@ class SolarInsightApp extends StatelessWidget {
       ],
       supportedLocales: const [Locale('pt', 'BR')],
 
-      // --- LOGICA DE PERSISTÊNCIA DE LOGIN ---
+      // --- LÓGICA DE PERSISTÊNCIA DE LOGIN ---
       home: StreamBuilder<User?>(
         stream: FirebaseAuth.instance.authStateChanges(),
         builder: (context, snapshot) {

@@ -1,5 +1,5 @@
 // Caminho: lib/screens/cadastro_usina_screen.dart
-// Descrição: Tela de Cadastro com padrão de Painel Web (Botão Fechar "X" e Cancelar).
+// Descrição: Tela de Cadastro com Bloqueios Inteligentes (Freemium) e Regras para Funcionários/Admin.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,11 +8,14 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../utils/app_feedback.dart';
 import '../services/logger_service.dart';
 import '../services/sync_queue_service.dart';
+import '../services/subscription_provider.dart';
+import 'paywall_screen.dart';
 
 class CadastroUsinaScreen extends StatefulWidget {
   final Usina? usinaParaEditar;
@@ -45,6 +48,10 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   bool _isAdmin = false;
   String _currentUid = '';
 
+  // Variáveis para Contagem de Limites
+  int _totalGeradorasAtuais = 0;
+  int _totalBeneficiariasAtuais = 0;
+
   double get totalPotenciaInversores {
     if (_listaInversores.isEmpty) return 0.0;
     return _listaInversores.fold(
@@ -65,6 +72,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   void initState() {
     super.initState();
     _carregarPermissoes();
+    _contarUsinasAtuais();
 
     if (widget.usinaParaEditar != null) {
       final usina = widget.usinaParaEditar!;
@@ -79,7 +87,33 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       _listaInvestimentos = List.from(usina.investimentos);
       _listaBeneficiarias = List.from(usina.beneficiarias);
       _verificarHistorico(usina.id);
+    } else {
+      // Lógica Inteligente para Novo Cadastro:
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final subProvider = Provider.of<SubscriptionProvider>(
+          context,
+          listen: false,
+        );
+        if (!subProvider.podeAdicionarUsinaGeradora(_totalGeradorasAtuais) &&
+            subProvider.podeAdicionarUsinaFilha(_totalBeneficiariasAtuais)) {
+          setState(() {
+            _tipoSelecionado = tipoBeneficiaria;
+          });
+        }
+      });
     }
+  }
+
+  void _contarUsinasAtuais() {
+    final box = Hive.box<Usina>('usinas');
+    setState(() {
+      _totalGeradorasAtuais = box.values
+          .where((u) => u.isGeradora && !u.isDeletado)
+          .length;
+      _totalBeneficiariasAtuais = box.values
+          .where((u) => !u.isGeradora && !u.isDeletado)
+          .length;
+    });
   }
 
   double _parsePotencia(String text) {
@@ -280,6 +314,37 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   }
 
   void _vincularBeneficiaria() {
+    // --- VERIFICAÇÃO DO GUARDIÃO ANTES DE ABRIR A TELA DE VINCULAÇÃO ---
+    final subProvider = Provider.of<SubscriptionProvider>(
+      context,
+      listen: false,
+    );
+
+    // O Rateio na Geradora também conta para o limite se ele não for PRO
+    if (!subProvider.podeAdicionarUsinaFilha(_listaBeneficiarias.length)) {
+      if (subProvider.isAdmin) {
+        // ABRINDO A VITRINE SE FOR ADMIN
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PaywallScreen(
+              mensagemMotivo:
+                  "Limite de filhas atingido (${SubscriptionProvider.limiteUsinasFilhasGratis} unidades).",
+            ),
+          ),
+        );
+      } else {
+        // MENSAGEM DE ERRO SE FOR FUNCIONÁRIO
+        AppFeedback.show(
+          context,
+          "🔒 Limite de rateio atingido. Solicite ao administrador que faça o upgrade para o PRO.",
+          isError: true,
+        );
+      }
+      return;
+    }
+    // ----------------------------------------------------------------------
+
     final percCtrl = TextEditingController();
     final candidatos = Hive.box<Usina>('usinas').values
         .where(
@@ -635,7 +700,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   Widget build(BuildContext context) {
     bool isGeradora = _tipoSelecionado == tipoGeradora;
 
-    // CORREÇÃO: Alterado de 'sum' para 'acc' para evitar conflito com tipos do Dart
     double totalRateio = _listaBeneficiarias.fold(
       0.0,
       (acc, item) => acc + item.percentual,
@@ -645,8 +709,22 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     bool isCriador = widget.usinaParaEditar?.criadoPor == _currentUid;
     bool podeExcluir = _isAdmin || isCriador;
 
-    // A MÁGICA DO BOTÃO FECHAR NA WEB
     bool isWeb = MediaQuery.of(context).size.width >= 900;
+
+    // Obtém o guardião para verificar limites na UI
+    final subProvider = Provider.of<SubscriptionProvider>(context);
+    bool podeGeradora = subProvider.podeAdicionarUsinaGeradora(
+      _totalGeradorasAtuais,
+    );
+    bool podeBeneficiaria = subProvider.podeAdicionarUsinaFilha(
+      _totalBeneficiariasAtuais,
+    );
+
+    // Libera a edição se já for uma usina existente, para ele não ficar trancado de editar a própria usina
+    if (widget.usinaParaEditar != null) {
+      if (widget.usinaParaEditar!.isGeradora) podeGeradora = true;
+      if (!widget.usinaParaEditar!.isGeradora) podeBeneficiaria = true;
+    }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
@@ -700,15 +778,20 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                   ),
                   child: Row(
                     children: [
+                      // PASSA O BLOQUEIO COMO PARÂMETRO
                       _buildTypeOption(
                         'GERADORA',
                         tipoGeradora,
                         Icons.solar_power,
+                        isBloqueado: !podeGeradora,
+                        isAdmin: subProvider.isAdmin, // <--- NOVO
                       ),
                       _buildTypeOption(
                         'BENEFICIÁRIA',
                         tipoBeneficiaria,
                         Icons.home_work,
+                        isBloqueado: !podeBeneficiaria,
+                        isAdmin: subProvider.isAdmin, // <--- NOVO
                       ),
                     ],
                   ),
@@ -1232,32 +1315,74 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     ),
   );
 
-  Widget _buildTypeOption(String label, String value, IconData icon) {
+  // --- NOVA LÓGICA DO BOTÃO COM CADEADO (COM PAYWALL E CARGO) ---
+  Widget _buildTypeOption(
+    String label,
+    String value,
+    IconData icon, {
+    bool isBloqueado = false,
+    bool isAdmin = true, // <--- NOVO
+  }) {
     bool isSelected = _tipoSelecionado == value;
+
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => _tipoSelecionado = value),
+        onTap: () {
+          if (isBloqueado) {
+            if (isAdmin) {
+              // ABRINDO A VITRINE SE FOR ADMIN
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PaywallScreen(
+                    mensagemMotivo:
+                        "Limite atingido para $label no Plano Grátis.",
+                  ),
+                ),
+              );
+            } else {
+              // MENSAGEM SE FOR FUNCIONÁRIO
+              AppFeedback.show(
+                context,
+                "🔒 Limite de $label atingido. Solicite ao administrador que faça o upgrade para o PRO.",
+                isError: true,
+              );
+            }
+            return;
+          }
+          setState(() => _tipoSelecionado = value);
+        },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? Colors.deepOrange : Colors.transparent,
+            color: isSelected
+                ? Colors.deepOrange
+                : (isBloqueado ? Colors.grey.shade200 : Colors.transparent),
             borderRadius: BorderRadius.circular(8),
+            border: isBloqueado
+                ? Border.all(color: Colors.grey.shade300)
+                : null,
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(
-                icon,
-                color: isSelected ? Colors.white : Colors.grey,
-                size: 20,
+                isBloqueado ? Icons.lock : icon,
+                color: isSelected
+                    ? Colors.white
+                    : (isBloqueado ? Colors.grey.shade400 : Colors.grey),
+                size: 18,
               ),
               const SizedBox(width: 8),
               Text(
                 label,
                 style: TextStyle(
-                  color: isSelected ? Colors.white : Colors.grey,
+                  color: isSelected
+                      ? Colors.white
+                      : (isBloqueado ? Colors.grey.shade500 : Colors.grey),
                   fontWeight: FontWeight.bold,
+                  fontSize: 13,
                 ),
               ),
             ],

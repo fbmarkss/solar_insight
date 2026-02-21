@@ -1,8 +1,7 @@
 // Caminho: lib/services/sincronizacao_service.dart
-// Status: 100% COMPLETO | Motor Reativo Background + Smart Garbage Collector.
-// ATUALIZAÇÃO: Correção no empacotamento de Investimentos e Beneficiárias.
+// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA) e Correção de Updates.
 
-import 'dart:async'; // Necessário para o StreamSubscription do Motor
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hive/hive.dart';
@@ -24,18 +23,14 @@ class SincronizacaoService {
   // ⚙️ MOTOR INVISÍVEL (REATIVIDADE E AUTO-START)
   // ===========================================================================
   static bool _isSyncing = false;
-  static bool isPaused = false; // <-- CHAVE GERAL DE PAUSA ADICIONADA
+  static bool isPaused = false;
   static StreamSubscription? _conexaoSub;
 
-  /// Inicia o "Despertador" e os ouvintes de Fila e Conexão.
-  /// Chamado uma vez ao abrir o App.
   static void inicializarMotorReativo() {
-    // 1. Ouve a Fila: Se alguém salvar algo localmente, tenta sincronizar na hora.
     SyncQueueService.onQueueUpdated = () {
       _dispararSyncSilencioso();
     };
 
-    // 2. Ouve a Internet: Se o celular/PC reconectar, verifica se tem fila parada.
     _conexaoSub ??= Connectivity().onConnectivityChanged.listen((
       resultados,
     ) async {
@@ -50,15 +45,11 @@ class SincronizacaoService {
       }
     });
 
-    // 3. Auto-Start: Faz uma verificação de segurança assim que o app liga.
     _dispararSyncSilencioso();
   }
 
-  /// Executa a sincronização em segundo plano com trava para não atropelar processos.
   static Future<void> _dispararSyncSilencioso() async {
-    if (_isSyncing || isPaused) {
-      return; // <-- BLOQUEIO ADICIONADO SE ESTIVER PAUSADO
-    }
+    if (_isSyncing || isPaused) return;
 
     _isSyncing = true;
     try {
@@ -66,7 +57,7 @@ class SincronizacaoService {
     } catch (e) {
       debugPrint('🔇 [MOTOR ERRO] Falha silenciosa: $e');
     } finally {
-      _isSyncing = false; // Libera a trava quando terminar
+      _isSyncing = false;
     }
   }
 
@@ -75,7 +66,6 @@ class SincronizacaoService {
   // ===========================================================================
 
   Future<String> sincronizarTudo() async {
-    // <-- BLOQUEIO MANUAL ADICIONADO AQUI TAMBÉM
     if (isPaused) {
       debugPrint('--- ⏸️ [SYNC] Sincronização Pausada pelo Usuário. ---');
       return 'Erro: Sincronização pausada pelo usuário.';
@@ -140,7 +130,7 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // USINAS (COM PROTEÇÃO ZOMBIE DATA)
+  // USINAS
   // ===========================================================================
 
   Future<int> _enviarUsinasLocais(String empresaId, String userId) async {
@@ -165,9 +155,6 @@ class SincronizacaoService {
             final diasSemSync = DateTime.now().difference(ultimaMod).inDays;
 
             if (diasSemSync > 30) {
-              debugPrint(
-                '🧟 [ZOMBIE KILL] Usina ${usina.nome} deletada localmente (Lixo antigo).',
-              );
               await usina.delete();
               await SyncQueueService.remove('usinas', usina.id);
               continue;
@@ -230,7 +217,7 @@ class SincronizacaoService {
         }
       } else if (usinaLocal.ultimaSincronizacao == null ||
           dataNuvem.isAfter(usinaLocal.ultimaSincronizacao!)) {
-        _atualizarUsinaComMap(usinaLocal, dados);
+        _atualizarUsinaComMap(usinaLocal, dados); // AQUI FOI CORRIGIDO
         if (!usinaLocal.isDeletado) {
           usinaLocal.ultimaSincronizacao = DateTime.now();
         }
@@ -242,11 +229,7 @@ class SincronizacaoService {
     final usinasParaApagar = box.values
         .where((u) => u.idRemoto != null && !idsNaNuvem.contains(u.idRemoto))
         .toList();
-
     for (var u in usinasParaApagar) {
-      debugPrint(
-        '🗑️ [HARD DELETE LOCAL] Usina ${u.nome} não existe mais na nuvem.',
-      );
       await u.delete();
       contador++;
     }
@@ -255,7 +238,7 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // LANÇAMENTOS (COM PROTEÇÃO ZOMBIE DATA)
+  // LANÇAMENTOS (FATURAS)
   // ===========================================================================
 
   Future<int> _enviarLancamentosLocais(String empresaId, String userId) async {
@@ -277,7 +260,6 @@ class SincronizacaoService {
           if (!docSnapshot.exists) {
             final ultimaMod = l.ultimaModificacao ?? DateTime.now();
             if (DateTime.now().difference(ultimaMod).inDays > 30) {
-              debugPrint('🧟 [ZOMBIE KILL] Lançamento deletado localmente.');
               await l.delete();
               await SyncQueueService.remove('lancamentos', l.id);
               continue;
@@ -343,12 +325,16 @@ class SincronizacaoService {
 
       if (local.usinaId.isEmpty) {
         if (dados['isDeletado'] != true) {
-          await box.add(LancamentoMensal.fromMap(dados)..idRemoto = doc.id);
+          // AQUI USAMOS O NOVO TRADUTOR BLINDADO!
+          await box.add(_mapToLancamento(dados, doc.id));
           contador++;
         }
       } else if (local.ultimaModificacao == null ||
           dataNuvem.isAfter(local.ultimaModificacao!)) {
-        _atualizarLancamentoComMap(local, dados);
+        _atualizarLancamentoComMap(
+          local,
+          dados,
+        ); // AQUI FOI CORRIGIDO (Traz todos os dados)
         if (!local.isDeletado) local.ultimaSincronizacao = DateTime.now();
         await local.save();
         contador++;
@@ -358,7 +344,6 @@ class SincronizacaoService {
     final lancsParaApagar = box.values
         .where((l) => l.idRemoto != null && !idsNaNuvem.contains(l.idRemoto))
         .toList();
-
     for (var l in lancsParaApagar) {
       await l.delete();
       contador++;
@@ -372,18 +357,14 @@ class SincronizacaoService {
   // ===========================================================================
 
   Future<int> _executarFaxinaInteligente(String empresaId) async {
-    debugPrint('🧹 [FAXINA] Iniciando análise inteligente...');
     int totalRemovido = 0;
-
     final usersSnapshot = await _firestore
         .collection('users')
         .where('empresaId', isEqualTo: empresaId)
         .get();
-
     DateTime dataSyncMaisAntiga = DateTime.now();
 
     if (usersSnapshot.docs.length <= 1) {
-      debugPrint('🧹 [FAXINA] Único usuário. Modo limpeza total ativado.');
       dataSyncMaisAntiga = DateTime.now().add(const Duration(days: 1));
     } else {
       for (var doc in usersSnapshot.docs) {
@@ -401,10 +382,6 @@ class SincronizacaoService {
 
     DateTime dataLimiteAbsoluta = DateTime.now().subtract(_prazoQuarentena);
 
-    debugPrint(
-      '🧹 [FAXINA] Elo mais fraco sincronizou em: $dataSyncMaisAntiga',
-    );
-
     final boxUsinas = Hive.box<Usina>('usinas');
     final usinasLixo = boxUsinas.values
         .where((u) => u.isDeletado && u.idRemoto != null)
@@ -412,16 +389,12 @@ class SincronizacaoService {
 
     for (var u in usinasLixo) {
       DateTime dataDelecao = u.ultimaSincronizacao ?? DateTime.now();
-      bool podeMatar =
-          dataSyncMaisAntiga.isAfter(dataDelecao) ||
-          dataDelecao.isBefore(dataLimiteAbsoluta);
-
-      if (podeMatar) {
+      if (dataSyncMaisAntiga.isAfter(dataDelecao) ||
+          dataDelecao.isBefore(dataLimiteAbsoluta)) {
         await _firestore.collection('usinas').doc(u.idRemoto).delete();
         await u.delete();
         await SyncQueueService.remove('usinas', u.id);
         totalRemovido++;
-        debugPrint('🧹 [FAXINA] Usina ${u.nome} removida permanentemente.');
       }
     }
 
@@ -432,23 +405,19 @@ class SincronizacaoService {
 
     for (var l in lancsLixo) {
       DateTime dataDelecao = l.ultimaModificacao ?? DateTime.now();
-      bool podeMatar =
-          dataSyncMaisAntiga.isAfter(dataDelecao) ||
-          dataDelecao.isBefore(dataLimiteAbsoluta);
-
-      if (podeMatar) {
+      if (dataSyncMaisAntiga.isAfter(dataDelecao) ||
+          dataDelecao.isBefore(dataLimiteAbsoluta)) {
         await _firestore.collection('lancamentos').doc(l.idRemoto).delete();
         await l.delete();
         await SyncQueueService.remove('lancamentos', l.id);
         totalRemovido++;
       }
     }
-
     return totalRemovido;
   }
 
   // ===========================================================================
-  // HELPERS DE CONVERSÃO (CORRIGIDOS PARA INVESTIMENTOS E BENEFICIÁRIAS)
+  // HELPERS DE CONVERSÃO (O SEGREDO DA ESTABILIDADE)
   // ===========================================================================
 
   DateTime _converterParaDateTime(dynamic valor) {
@@ -488,7 +457,6 @@ class SincronizacaoService {
             },
           )
           .toList(),
-      // --- CORREÇÃO: ADICIONADO EMPACOTAMENTO ---
       'investimentos': u.investimentos
           .map(
             (inv) => {
@@ -540,7 +508,6 @@ class SincronizacaoService {
             ),
           )
           .toList(),
-      // --- CORREÇÃO: ADICIONADO DESEMPACOTAMENTO ---
       investimentos: (map['investimentos'] as List? ?? [])
           .map(
             (inv) => InvestimentoItem(
@@ -568,7 +535,9 @@ class SincronizacaoService {
     u.ativa = m['ativa'] ?? u.ativa;
     u.isDeletado = m['isDeletado'] ?? false;
 
-    // Atualiza também os campos complexos para refletir edições de outros usuários
+    // --- O BUG FOI CORRIGIDO AQUI! ---
+    u.tipo = m['tipo'] ?? u.tipo;
+
     final usinaAtualizada = _mapToUsina(m, u.idRemoto!);
     u.inversores = usinaAtualizada.inversores;
     u.paineis = usinaAtualizada.paineis;
@@ -576,20 +545,88 @@ class SincronizacaoService {
     u.beneficiarias = usinaAtualizada.beneficiarias;
   }
 
+  // --- O NOVO TRADUTOR BLINDADO DE FATURAS ---
+  LancamentoMensal _mapToLancamento(Map<String, dynamic> map, String idRemoto) {
+    return LancamentoMensal(
+      id: map['id'],
+      usinaId: map['usinaId'] ?? '',
+      dataReferencia: _converterParaDateTime(
+        map['dataReferencia'],
+      ), // Agora é à prova de falhas!
+      geracaoTotalKwh: (map['geracaoTotalKwh'] as num?)?.toDouble() ?? 0.0,
+      energiaInjetadaKwh:
+          (map['energiaInjetadaKwh'] as num?)?.toDouble() ?? 0.0,
+      energiaConsumidaRedeKwh:
+          (map['energiaConsumidaRedeKwh'] as num?)?.toDouble() ?? 0.0,
+      tarifaKwh: (map['tarifaKwh'] as num?)?.toDouble() ?? 0.0,
+      valorFaturaR: (map['valorFaturaR'] as num?)?.toDouble() ?? 0.0,
+      observacao: map['observacao'],
+      leituraInversor: (map['leituraInversor'] as num?)?.toDouble(),
+      custoDemandaR: (map['custoDemandaR'] as num?)?.toDouble() ?? 0.0,
+      idRemoto: idRemoto,
+      tenantId: map['tenantId'],
+      ultimaModificacao: _converterParaDateTime(map['ultimaAtualizacao']),
+      isDeletado: map['isDeletado'] ?? false,
+      fonteOrigem: map['fonteOrigem'] ?? 'MANUAL',
+      editadoPor: map['editadoPor'],
+      criadoPor: map['criadoPor'],
+      saldoInformadoNaFatura: (map['saldoInformadoNaFatura'] as num?)
+          ?.toDouble(),
+
+      // Campos da IA
+      grupoTarifario: map['grupoTarifario'],
+      modalidadeTarifaria: map['modalidadeTarifaria'],
+      consumoPonta: (map['consumoPonta'] as num?)?.toDouble(),
+      consumoForaPonta: (map['consumoForaPonta'] as num?)?.toDouble(),
+      consumoReservado: (map['consumoReservado'] as num?)?.toDouble(),
+      injetadaPonta: (map['injetadaPonta'] as num?)?.toDouble(),
+      injetadaForaPonta: (map['injetadaForaPonta'] as num?)?.toDouble(),
+      injetadaReservada: (map['injetadaReservada'] as num?)?.toDouble(),
+      tarifaTeUnica: (map['tarifaTeUnica'] as num?)?.toDouble(),
+      tarifaTusdUnica: (map['tarifaTusdUnica'] as num?)?.toDouble(),
+      tarifaTePonta: (map['tarifaTePonta'] as num?)?.toDouble(),
+      tarifaTusdPonta: (map['tarifaTusdPonta'] as num?)?.toDouble(),
+      tarifaTeForaPonta: (map['tarifaTeForaPonta'] as num?)?.toDouble(),
+      tarifaTusdForaPonta: (map['tarifaTusdForaPonta'] as num?)?.toDouble(),
+      custoIluminacaoPublica: (map['custoIluminacaoPublica'] as num?)
+          ?.toDouble(),
+      multaReativo: (map['multaReativo'] as num?)?.toDouble(),
+    );
+  }
+
   void _atualizarLancamentoComMap(LancamentoMensal l, Map<String, dynamic> m) {
-    if (m['dataReferencia'] != null) {
-      l.dataReferencia = _converterParaDateTime(m['dataReferencia']);
-    }
-    l.geracaoTotalKwh = (m['geracaoTotalKwh'] as num?)?.toDouble() ?? 0.0;
-    l.valorFaturaR = (m['valorFaturaR'] as num?)?.toDouble() ?? 0.0;
-    l.energiaInjetadaKwh = (m['energiaInjetadaKwh'] as num?)?.toDouble() ?? 0.0;
-    l.energiaConsumidaRedeKwh =
-        (m['energiaConsumidaRedeKwh'] as num?)?.toDouble() ?? 0.0;
-    l.tarifaKwh = (m['tarifaKwh'] as num?)?.toDouble() ?? 0.0;
-    l.custoDemandaR = (m['custoDemandaR'] as num?)?.toDouble() ?? 0.0;
-    l.leituraInversor = (m['leituraInversor'] as num?)?.toDouble();
-    l.observacao = m['observacao'];
-    l.isDeletado = m['isDeletado'] ?? false;
-    l.ultimaModificacao = _converterParaDateTime(m['ultimaAtualizacao']);
+    // Para garantir que nada é esquecido, mapeamos o objeto todo e clonamos
+    final lNuvem = _mapToLancamento(m, l.idRemoto!);
+
+    l.dataReferencia = lNuvem.dataReferencia;
+    l.geracaoTotalKwh = lNuvem.geracaoTotalKwh;
+    l.energiaInjetadaKwh = lNuvem.energiaInjetadaKwh;
+    l.energiaConsumidaRedeKwh = lNuvem.energiaConsumidaRedeKwh;
+    l.tarifaKwh = lNuvem.tarifaKwh;
+    l.valorFaturaR = lNuvem.valorFaturaR;
+    l.custoDemandaR = lNuvem.custoDemandaR;
+    l.leituraInversor = lNuvem.leituraInversor;
+    l.observacao = lNuvem.observacao;
+    l.isDeletado = lNuvem.isDeletado;
+    l.ultimaModificacao = lNuvem.ultimaModificacao;
+    l.saldoInformadoNaFatura = lNuvem.saldoInformadoNaFatura;
+
+    // --- O BUG FOI CORRIGIDO AQUI! (Trazendo a IA) ---
+    l.grupoTarifario = lNuvem.grupoTarifario;
+    l.modalidadeTarifaria = lNuvem.modalidadeTarifaria;
+    l.consumoPonta = lNuvem.consumoPonta;
+    l.consumoForaPonta = lNuvem.consumoForaPonta;
+    l.consumoReservado = lNuvem.consumoReservado;
+    l.injetadaPonta = lNuvem.injetadaPonta;
+    l.injetadaForaPonta = lNuvem.injetadaForaPonta;
+    l.injetadaReservada = lNuvem.injetadaReservada;
+    l.tarifaTeUnica = lNuvem.tarifaTeUnica;
+    l.tarifaTusdUnica = lNuvem.tarifaTusdUnica;
+    l.tarifaTePonta = lNuvem.tarifaTePonta;
+    l.tarifaTusdPonta = lNuvem.tarifaTusdPonta;
+    l.tarifaTeForaPonta = lNuvem.tarifaTeForaPonta;
+    l.tarifaTusdForaPonta = lNuvem.tarifaTusdForaPonta;
+    l.custoIluminacaoPublica = lNuvem.custoIluminacaoPublica;
+    l.multaReativo = lNuvem.multaReativo;
   }
 }
