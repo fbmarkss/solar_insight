@@ -1,11 +1,11 @@
 // Caminho: lib/services/gemini_service.dart
-// Descrição: Serviço de Integração com o Google Gemini (Versão com Busca Inteligente de Modelos).
+// Descrição: Serviço de Integração com o Google Gemini (Versão Web-Safe via REST API).
 
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
 
 class GeminiService {
   Future<Map<String, dynamic>?> analisarFaturaPdf(Uint8List pdfBytes) async {
@@ -21,13 +21,10 @@ class GeminiService {
       }
 
       // 1. LISTA DE MODELOS À PROVA DE FALHAS
-      // O aplicativo vai tentar do mais moderno para o mais antigo até o servidor do Google aceitar.
       final modelosParaTestar = [
         'gemini-2.5-flash',
         'gemini-2.0-flash',
         'gemini-1.5-flash',
-        'gemini-1.5-flash-001',
-        'gemini-1.5-flash-002',
         'gemini-1.5-pro',
       ];
 
@@ -70,44 +67,82 @@ FORMATO DE SAÍDA OBRIGATÓRIO:
 Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
 ''';
 
-      final prompt = TextPart(promptText);
-      final pdfPart = DataPart('application/pdf', pdfBytes);
+      // Converte o PDF para Base64 (Necessário para a API REST)
+      String base64Pdf = base64Encode(pdfBytes);
 
-      // 2. LOOP DE TENTATIVAS
+      // 2. LOOP DE TENTATIVAS VIA HTTP REST
       for (String nomeModelo in modelosParaTestar) {
         try {
-          debugPrint('🤖 Tentando comunicar com o modelo: $nomeModelo...');
-
-          final model = GenerativeModel(
-            model: nomeModelo,
-            apiKey: apiKey,
-            // Removido o responseMimeType para evitar bloqueio de API Version
+          debugPrint(
+            '🤖 Tentando comunicar com o modelo: $nomeModelo via HTTP...',
           );
 
-          final response = await model.generateContent([
-            Content.multi([prompt, pdfPart]),
-          ]);
+          final url = Uri.parse(
+            'https://generativelanguage.googleapis.com/v1beta/models/$nomeModelo:generateContent?key=$apiKey',
+          );
 
-          if (response.text != null && response.text!.isNotEmpty) {
+          // Monta o corpo da requisição exatamente como o pacote oficial faz por trás dos panos
+          final body = jsonEncode({
+            "contents": [
+              {
+                "parts": [
+                  {"text": promptText},
+                  {
+                    "inlineData": {
+                      "mimeType": "application/pdf",
+                      "data": base64Pdf,
+                    },
+                  },
+                ],
+              },
+            ],
+            // Força a IA a cuspir JSON puro (Garante menos erros no decode)
+            "generationConfig": {"responseMimeType": "application/json"},
+          });
+
+          final response = await http.post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: body,
+          );
+
+          if (response.statusCode == 200) {
             debugPrint('✅ SUCESSO! O modelo $nomeModelo processou a fatura.');
 
-            // 3. LIMPEZA DE DADOS
-            // Como removemos a trava da API, a IA pode devolver o texto com marcações Markdown.
-            String jsonPuro = response.text!;
-            jsonPuro = jsonPuro
-                .replaceAll('```json', '')
-                .replaceAll('```', '')
-                .trim();
+            final jsonResponse = jsonDecode(response.body);
 
-            return jsonDecode(jsonPuro);
+            // Navega na estrutura do JSON de resposta da API do Gemini
+            String? textoGerado =
+                jsonResponse['candidates']?[0]['content']['parts']?[0]['text'];
+
+            if (textoGerado != null && textoGerado.isNotEmpty) {
+              // 3. LIMPEZA DE DADOS
+              String jsonPuro = textoGerado
+                  .replaceAll('```json', '')
+                  .replaceAll('```', '')
+                  .trim();
+
+              return jsonDecode(jsonPuro);
+            }
+          } else {
+            debugPrint(
+              '❌ O modelo $nomeModelo retornou erro HTTP: ${response.statusCode} - ${response.body}',
+            );
+            // Se o erro for de versão, continua o loop. Se for de API Key, aborta para não perder tempo.
+            if (response.statusCode == 400 &&
+                response.body.contains("API key not valid")) {
+              debugPrint('🚨 ERRO: A chave de API fornecida é inválida.');
+              return null;
+            }
           }
         } catch (e) {
-          debugPrint('❌ O modelo $nomeModelo foi rejeitado. Erro: $e');
-          // Continua o loop para testar o próximo modelo da lista
+          debugPrint('❌ Falha ao tentar conectar ao $nomeModelo. Erro: $e');
         }
       }
 
-      debugPrint('🚨 ERRO: Nenhum modelo foi aceite pela sua conta Google.');
+      debugPrint(
+        '🚨 ERRO: Nenhum modelo conseguiu processar o documento via Web.',
+      );
       return null;
     } catch (e) {
       debugPrint('🚨 Erro Fatal no GeminiService: $e');

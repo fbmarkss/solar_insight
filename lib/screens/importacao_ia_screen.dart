@@ -1,5 +1,5 @@
 // Caminho: lib/screens/importacao_ia_screen.dart
-// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO) - Integrada com Gemini e Validação de Plano.
+// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO) - Integrada com Gemini e Bloqueio Visual Dinâmico.
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/usina.dart';
 import '../services/gemini_service.dart';
+import 'paywall_screen.dart';
 
 class ImportacaoIaScreen extends StatefulWidget {
   final Usina? usinaSelecionada;
@@ -21,6 +22,9 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
   bool _isAnalyzing = false;
   String _statusMessage = 'Aguardando documento...';
 
+  // Variável que controla a tela: null = carregando, true = PRO, false = Bloqueado
+  bool? _isUsuarioPro;
+
   final List<String> _loadingMessages = [
     'Enviando PDF seguro para nuvem...',
     'Identificando concessionária...',
@@ -31,16 +35,15 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
     'Quase pronto...',
   ];
 
-  Future<void> _selecionarEAnalisarPdf() async {
-    // --- 1. VERIFICAÇÃO DE SEGURANÇA (PAYWALL REAL) ---
-    setState(() {
-      _isAnalyzing = true;
-      _statusMessage = 'Validando credenciais de acesso...';
-    });
+  @override
+  void initState() {
+    super.initState();
+    _verificarPlanoUsuario();
+  }
 
-    bool usuarioPodeUsarIA = false;
+  // Busca o plano do usuário logo ao abrir a tela
+  Future<void> _verificarPlanoUsuario() async {
     final user = FirebaseAuth.instance.currentUser;
-
     if (user != null) {
       try {
         final doc = await FirebaseFirestore.instance
@@ -49,30 +52,26 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
             .get();
         final data = doc.data();
 
-        // Regra de Negócio: Admins ou usuários marcados como PRO no Firestore
-        bool isAdmin = data?['role'] == 'admin';
+        // --- AQUI FOI CORRIGIDO O "VAZAMENTO VIP" ---
+        // Ser Admin não dá direito ao plano PRO de graça. Apenas assinantes passam.
         bool isPro = data?['plano'] == 'pro' || data?['isPro'] == true;
 
-        usuarioPodeUsarIA = isAdmin || isPro;
+        if (mounted) {
+          setState(() {
+            _isUsuarioPro = isPro; // Estritamente validado pelo plano
+          });
+        }
       } catch (e) {
         debugPrint("Erro ao verificar plano: $e");
+        if (mounted) setState(() => _isUsuarioPro = false);
       }
+    } else {
+      if (mounted) setState(() => _isUsuarioPro = false);
     }
+  }
 
-    // Se não tiver permissão, aborta e mostra o painel de cobrança!
-    if (!usuarioPodeUsarIA) {
-      if (mounted) {
-        setState(() {
-          _isAnalyzing = false;
-          _statusMessage = 'Aguardando documento...';
-        });
-        _mostrarPaywall();
-      }
-      return;
-    }
-    // --------------------------------------------------
-
-    // --- 2. SE FOR PRO/ADMIN, CONTINUA O FLUXO NORMAL ---
+  Future<void> _selecionarEAnalisarPdf() async {
+    // Como a tela já validou o acesso no initState, não precisamos de travas aqui
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf'],
@@ -116,7 +115,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
         );
       }
     } else {
-      // Caso o usuário cancele a seleção do arquivo
       setState(() {
         _isAnalyzing = false;
         _statusMessage = 'Aguardando documento...';
@@ -127,54 +125,13 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
   void _iniciarAnimacaoDeStatus() async {
     for (int i = 1; i < _loadingMessages.length; i++) {
       if (!_isAnalyzing || !mounted) break;
-      await Future.delayed(
-        const Duration(seconds: 1),
-      ); // Animação sincronizada com a IA
+      await Future.delayed(const Duration(seconds: 1));
       if (mounted) {
         setState(() {
           _statusMessage = _loadingMessages[i];
         });
       }
     }
-  }
-
-  void _mostrarPaywall() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.workspace_premium, color: Colors.amber, size: 28),
-            SizedBox(width: 10),
-            Text('Recurso PRO'),
-          ],
-        ),
-        content: const Text(
-          'A leitura inteligente de faturas com IA extrai Consumo de Ponta, Multas de Reativo e separa a TUSD automaticamente.\n\nFaça o upgrade para o plano PRO para liberar este recurso.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('DEPOIS', style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // FUTURO: Navegar para a tela de Assinatura/Planos aqui
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.amber.shade700,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text('VER PLANOS'),
-          ),
-        ],
-      ),
-    );
   }
 
   void _mostrarSucesso(String mensagem) {
@@ -268,88 +225,182 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
                 ),
               ),
               const SizedBox(height: 40),
-              GestureDetector(
-                onTap: _isAnalyzing ? null : _selecionarEAnalisarPdf,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: double.infinity,
-                  height: 250,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: _isAnalyzing
-                          ? Colors.blue.shade300
-                          : Colors.deepOrange.shade200,
-                      width: 2,
-                      style: BorderStyle.solid,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _isAnalyzing
-                            ? Colors.blue.withValues(alpha: 0.1)
-                            : Colors.deepOrange.withValues(alpha: 0.05),
-                        blurRadius: 20,
-                        spreadRadius: 5,
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (_isAnalyzing) ...[
-                        const CircularProgressIndicator(color: Colors.blue),
-                        const SizedBox(height: 24),
-                        Text(
-                          _statusMessage,
-                          style: TextStyle(
-                            color: Colors.blue.shade700,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Aguarde um instante...',
-                          style: TextStyle(color: Colors.grey, fontSize: 12),
-                        ),
-                      ] else ...[
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Colors.deepOrange.shade50,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.upload_file,
-                            size: 48,
-                            color: Colors.deepOrange.shade400,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        const Text(
-                          'Toque para enviar o PDF',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                            color: Colors.black87,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Suporta faturas Grupo A e Grupo B',
-                          style: TextStyle(color: Colors.grey, fontSize: 13),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
+
+              // --- ÁREA DINÂMICA (CARREGANDO / BLOQUEADA / LIBERADA) ---
+              _buildDynamicArea(),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Widget _buildDynamicArea() {
+    if (_isUsuarioPro == null) {
+      // Estado 1: Carregando
+      return const SizedBox(
+        height: 250,
+        child: Center(
+          child: CircularProgressIndicator(color: Colors.deepOrange),
+        ),
+      );
+    } else if (_isUsuarioPro == false) {
+      // Estado 2: Bloqueado (Paywall Embutido)
+      return Container(
+        width: double.infinity,
+        height: 280,
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.amber.shade200, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.amber.withValues(alpha: 0.1),
+              blurRadius: 20,
+              spreadRadius: 5,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.lock_outline, size: 48, color: Colors.amber.shade600),
+            const SizedBox(height: 16),
+            const Text(
+              'Recurso Exclusivo',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+                color: Colors.black87,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Faça o upgrade para o plano PRO para liberar o preenchimento automático.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey, fontSize: 13),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton(
+                onPressed: () {
+                  // --- ROTEAMENTO DIRETO PARA O PAYWALL ---
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const PaywallScreen(
+                        mensagemMotivo:
+                            "Para usar a IA e automatizar os seus lançamentos, assine o plano PRO.",
+                      ),
+                    ),
+                  ).then((_) {
+                    // Quando ele fechar o Paywall, recarregamos a tela para ver se ele comprou
+                    _verificarPlanoUsuario();
+                  });
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.amber.shade600,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 0,
+                ),
+                child: const Text(
+                  'VER PLANOS',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // Estado 3: Liberado (PRO)
+      return GestureDetector(
+        onTap: _isAnalyzing ? null : _selecionarEAnalisarPdf,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          width: double.infinity,
+          height: 250,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: _isAnalyzing
+                  ? Colors.blue.shade300
+                  : Colors.deepOrange.shade200,
+              width: 2,
+              style: BorderStyle.solid,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _isAnalyzing
+                    ? Colors.blue.withValues(alpha: 0.1)
+                    : Colors.deepOrange.withValues(alpha: 0.05),
+                blurRadius: 20,
+                spreadRadius: 5,
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_isAnalyzing) ...[
+                const CircularProgressIndicator(color: Colors.blue),
+                const SizedBox(height: 24),
+                Text(
+                  _statusMessage,
+                  style: TextStyle(
+                    color: Colors.blue.shade700,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Aguarde um instante...',
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
+              ] else ...[
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: Colors.deepOrange.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.upload_file,
+                    size: 48,
+                    color: Colors.deepOrange.shade400,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Toque para enviar o PDF',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Suporta faturas Grupo A e Grupo B',
+                  style: TextStyle(color: Colors.grey, fontSize: 13),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
   }
 }
