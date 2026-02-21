@@ -26,7 +26,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // 1. Carrega as variáveis de ambiente (Chave do Gemini) ANTES de rodar o app
-  await dotenv.load(fileName: ".env");
+  await dotenv.load(fileName: "assets/geminiapp/gemini.txt");
 
   // 2. Inicializa Firebase com Opções (CRUCIAL PARA WEB)
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);

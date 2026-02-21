@@ -60,7 +60,7 @@ flutter:
   assets:
     - assets/logo.png
     - assets/logoweb.png
-    - .env
+    - assets/geminiapp/gemini.txt
 
 # ==========================================
 # CONFIGURAÇÃO DO ÍCONE DO APP E WEB

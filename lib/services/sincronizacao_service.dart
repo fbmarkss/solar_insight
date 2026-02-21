@@ -1,5 +1,5 @@
 // Caminho: lib/services/sincronizacao_service.dart
-// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA) e Correção de Updates.
+// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA), Garbage Collector Agressivo.
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -150,15 +150,12 @@ class SincronizacaoService {
               .collection('usinas')
               .doc(usina.idRemoto)
               .get();
-          if (!docSnapshot.exists) {
-            final ultimaMod = usina.ultimaSincronizacao ?? DateTime.now();
-            final diasSemSync = DateTime.now().difference(ultimaMod).inDays;
 
-            if (diasSemSync > 30) {
-              await usina.delete();
-              await SyncQueueService.remove('usinas', usina.id);
-              continue;
-            }
+          // FAXINA AGRESSIVA LOCAL: Se a usina sumiu da nuvem (Garbage Collector atuou), mato localmente.
+          if (!docSnapshot.exists) {
+            await usina.delete();
+            await SyncQueueService.remove('usinas', usina.id);
+            continue; // Pula para a próxima usina do loop
           }
         }
 
@@ -217,7 +214,7 @@ class SincronizacaoService {
         }
       } else if (usinaLocal.ultimaSincronizacao == null ||
           dataNuvem.isAfter(usinaLocal.ultimaSincronizacao!)) {
-        _atualizarUsinaComMap(usinaLocal, dados); // AQUI FOI CORRIGIDO
+        _atualizarUsinaComMap(usinaLocal, dados);
         if (!usinaLocal.isDeletado) {
           usinaLocal.ultimaSincronizacao = DateTime.now();
         }
@@ -257,13 +254,12 @@ class SincronizacaoService {
               .collection('lancamentos')
               .doc(l.idRemoto)
               .get();
+
+          // FAXINA AGRESSIVA LOCAL: Lançamento sumiu do banco? Apaga e não ressuscita.
           if (!docSnapshot.exists) {
-            final ultimaMod = l.ultimaModificacao ?? DateTime.now();
-            if (DateTime.now().difference(ultimaMod).inDays > 30) {
-              await l.delete();
-              await SyncQueueService.remove('lancamentos', l.id);
-              continue;
-            }
+            await l.delete();
+            await SyncQueueService.remove('lancamentos', l.id);
+            continue;
           }
         }
 
@@ -271,9 +267,8 @@ class SincronizacaoService {
             ? _firestore.collection('lancamentos').doc()
             : _firestore.collection('lancamentos').doc(l.idRemoto);
 
-        var map = l.toMap();
-        map['tenantId'] = empresaId;
-        map['ultimaAtualizacao'] = FieldValue.serverTimestamp();
+        // AGORA USAMOS A FUNÇÃO DE MAP INVERSO PARA GARANTIR OS CAMPOS DA IA
+        var map = _lancamentoToMap(l, empresaId);
         if (l.idRemoto == null) map['criadoPor'] = userId;
 
         await docRef.set(map, SetOptions(merge: true));
@@ -325,16 +320,12 @@ class SincronizacaoService {
 
       if (local.usinaId.isEmpty) {
         if (dados['isDeletado'] != true) {
-          // AQUI USAMOS O NOVO TRADUTOR BLINDADO!
           await box.add(_mapToLancamento(dados, doc.id));
           contador++;
         }
       } else if (local.ultimaModificacao == null ||
           dataNuvem.isAfter(local.ultimaModificacao!)) {
-        _atualizarLancamentoComMap(
-          local,
-          dados,
-        ); // AQUI FOI CORRIGIDO (Traz todos os dados)
+        _atualizarLancamentoComMap(local, dados);
         if (!local.isDeletado) local.ultimaSincronizacao = DateTime.now();
         await local.save();
         contador++;
@@ -534,8 +525,6 @@ class SincronizacaoService {
     u.concessionaria = m['concessionaria'] ?? u.concessionaria;
     u.ativa = m['ativa'] ?? u.ativa;
     u.isDeletado = m['isDeletado'] ?? false;
-
-    // --- O BUG FOI CORRIGIDO AQUI! ---
     u.tipo = m['tipo'] ?? u.tipo;
 
     final usinaAtualizada = _mapToUsina(m, u.idRemoto!);
@@ -545,14 +534,53 @@ class SincronizacaoService {
     u.beneficiarias = usinaAtualizada.beneficiarias;
   }
 
+  // --- GARANTE QUE O UPLOAD ENVIE TODOS OS CAMPOS (INCLUINDO A IA) ---
+  Map<String, dynamic> _lancamentoToMap(LancamentoMensal l, String empresaId) {
+    return {
+      'id': l.id,
+      'usinaId': l.usinaId,
+      'dataReferencia': l.dataReferencia.millisecondsSinceEpoch,
+      'geracaoTotalKwh': l.geracaoTotalKwh,
+      'energiaInjetadaKwh': l.energiaInjetadaKwh,
+      'energiaConsumidaRedeKwh': l.energiaConsumidaRedeKwh,
+      'tarifaKwh': l.tarifaKwh,
+      'valorFaturaR': l.valorFaturaR,
+      'observacao': l.observacao,
+      'leituraInversor': l.leituraInversor,
+      'custoDemandaR': l.custoDemandaR,
+      'tenantId': empresaId,
+      'isDeletado': l.isDeletado,
+      'fonteOrigem': l.fonteOrigem,
+      'editadoPor': l.editadoPor,
+      'ultimaAtualizacao': FieldValue.serverTimestamp(),
+      'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
+
+      // --- CAMPOS DA IA ---
+      'grupoTarifario': l.grupoTarifario,
+      'modalidadeTarifaria': l.modalidadeTarifaria,
+      'consumoPonta': l.consumoPonta,
+      'consumoForaPonta': l.consumoForaPonta,
+      'consumoReservado': l.consumoReservado,
+      'injetadaPonta': l.injetadaPonta,
+      'injetadaForaPonta': l.injetadaForaPonta,
+      'injetadaReservada': l.injetadaReservada,
+      'tarifaTeUnica': l.tarifaTeUnica,
+      'tarifaTusdUnica': l.tarifaTusdUnica,
+      'tarifaTePonta': l.tarifaTePonta,
+      'tarifaTusdPonta': l.tarifaTusdPonta,
+      'tarifaTeForaPonta': l.tarifaTeForaPonta,
+      'tarifaTusdForaPonta': l.tarifaTusdForaPonta,
+      'custoIluminacaoPublica': l.custoIluminacaoPublica,
+      'multaReativo': l.multaReativo,
+    };
+  }
+
   // --- O NOVO TRADUTOR BLINDADO DE FATURAS ---
   LancamentoMensal _mapToLancamento(Map<String, dynamic> map, String idRemoto) {
     return LancamentoMensal(
       id: map['id'],
       usinaId: map['usinaId'] ?? '',
-      dataReferencia: _converterParaDateTime(
-        map['dataReferencia'],
-      ), // Agora é à prova de falhas!
+      dataReferencia: _converterParaDateTime(map['dataReferencia']),
       geracaoTotalKwh: (map['geracaoTotalKwh'] as num?)?.toDouble() ?? 0.0,
       energiaInjetadaKwh:
           (map['energiaInjetadaKwh'] as num?)?.toDouble() ?? 0.0,
@@ -595,7 +623,6 @@ class SincronizacaoService {
   }
 
   void _atualizarLancamentoComMap(LancamentoMensal l, Map<String, dynamic> m) {
-    // Para garantir que nada é esquecido, mapeamos o objeto todo e clonamos
     final lNuvem = _mapToLancamento(m, l.idRemoto!);
 
     l.dataReferencia = lNuvem.dataReferencia;
@@ -611,7 +638,7 @@ class SincronizacaoService {
     l.ultimaModificacao = lNuvem.ultimaModificacao;
     l.saldoInformadoNaFatura = lNuvem.saldoInformadoNaFatura;
 
-    // --- O BUG FOI CORRIGIDO AQUI! (Trazendo a IA) ---
+    // IA
     l.grupoTarifario = lNuvem.grupoTarifario;
     l.modalidadeTarifaria = lNuvem.modalidadeTarifaria;
     l.consumoPonta = lNuvem.consumoPonta;

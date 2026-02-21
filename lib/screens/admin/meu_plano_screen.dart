@@ -113,7 +113,10 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
           // --- CARD DE STATUS INTEGRADO AO PROVIDER ---
           Consumer<SubscriptionProvider>(
             builder: (context, subProvider, child) {
-              return _buildStatusCard(subProvider);
+              return _buildStatusCard(
+                subProvider,
+                context,
+              ); // Passamos o context para abrir a modal
             },
           ),
 
@@ -214,7 +217,10 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
     );
   }
 
-  Widget _buildStatusCard(SubscriptionProvider subProvider) {
+  Widget _buildStatusCard(
+    SubscriptionProvider subProvider,
+    BuildContext context,
+  ) {
     bool isPro = subProvider.isPro;
     String nomePlano = isPro ? "PRO" : "GRÁTIS";
     Color corPrincipal = isPro ? Colors.green : Colors.deepOrange;
@@ -309,15 +315,40 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
               height: 50,
               child: ElevatedButton.icon(
                 onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const PaywallScreen(
-                        mensagemMotivo:
-                            "Desbloqueie todo o poder da sua gestão solar!",
+                  // --- MUDANÇA AQUI: INTELIGÊNCIA DE NAVEGAÇÃO PARA WEB/MOBILE ---
+                  bool isDesktop = MediaQuery.of(context).size.width >= 900;
+
+                  if (isDesktop) {
+                    showDialog(
+                      context: context,
+                      builder: (context) => Dialog(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: const ClipRRect(
+                          borderRadius: BorderRadius.all(Radius.circular(24)),
+                          child: SizedBox(
+                            width: 500, // Limita a largura do Paywall na Web
+                            height: 650, // Limita a altura
+                            child: PaywallScreen(
+                              mensagemMotivo:
+                                  "Desbloqueie todo o poder da sua gestão solar!",
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  );
+                    );
+                  } else {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const PaywallScreen(
+                          mensagemMotivo:
+                              "Desbloqueie todo o poder da sua gestão solar!",
+                        ),
+                      ),
+                    );
+                  }
                 },
                 icon: const Icon(Icons.rocket_launch),
                 label: const Text(
