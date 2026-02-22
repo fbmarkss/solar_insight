@@ -1,9 +1,9 @@
 // Caminho: lib/screens/auditoria_individual_screen.dart
-// Descrição: Tela de Auditoria Anual com uso de Dados Reais e Alerta de Retenção da Concessionária.
+// Descrição: Tela de Auditoria Anual com uso de Dados Reais, Gráficos de Balanço e Custo Evitado, e Alerta de Retenção da Concessionária.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../utils/calculadora_energetica.dart';
@@ -55,6 +55,84 @@ class AuditoriaIndividualScreen extends StatelessWidget {
             lancamentos,
           );
 
+          // ===================================================================
+          // PROCESSAMENTO DE DADOS PARA OS GRÁFICOS
+          // ===================================================================
+          Map<String, Map<String, dynamic>> dadosMensais = {};
+
+          for (var l in lancamentos) {
+            String key = DateFormat('yyyyMM').format(l.dataReferencia);
+            String display = DateFormat(
+              'MMM',
+              'pt_BR',
+            ).format(l.dataReferencia).toUpperCase();
+
+            if (l.dataReferencia.year != DateTime.now().year) {
+              display = DateFormat(
+                'MMM/yy',
+                'pt_BR',
+              ).format(l.dataReferencia).toUpperCase();
+            }
+
+            dadosMensais.putIfAbsent(
+              key,
+              () => {
+                'mes': display,
+                'geracao': 0.0,
+                'consumo': 0.0,
+                'custo': 0.0,
+                'custoProjetado': 0.0,
+                'date': l.dataReferencia,
+              },
+            );
+
+            double energiaEfetivamentePoupada = 0;
+            double consumoReal = 0;
+
+            if (usina.isGeradora) {
+              double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
+                  .clamp(0.0, double.infinity);
+              double energiaCompensada = l.energiaInjetadaKwh.clamp(
+                0.0,
+                l.energiaConsumidaRedeKwh,
+              );
+
+              energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
+              consumoReal = autoconsumo + l.energiaConsumidaRedeKwh;
+
+              dadosMensais[key]!['geracao'] += l.geracaoTotalKwh;
+            } else {
+              double energiaCompensada = l.energiaInjetadaKwh.clamp(
+                0.0,
+                l.energiaConsumidaRedeKwh,
+              );
+              energiaEfetivamentePoupada = energiaCompensada;
+              consumoReal = l.energiaConsumidaRedeKwh;
+            }
+
+            double economiaFinanceira =
+                energiaEfetivamentePoupada * l.tarifaKwh;
+            double custoProjetado = l.valorFaturaR + economiaFinanceira;
+
+            dadosMensais[key]!['consumo'] += consumoReal;
+            dadosMensais[key]!['custo'] += l.valorFaturaR;
+            dadosMensais[key]!['custoProjetado'] += custoProjetado;
+          }
+
+          List<Map<String, dynamic>> graficoOrdenado = dadosMensais.values
+              .toList();
+          graficoOrdenado.sort(
+            (a, b) => (a['date'] as DateTime).compareTo(b['date']),
+          );
+
+          // Limita aos últimos 12 meses para os gráficos não ficarem esmagados
+          if (graficoOrdenado.length > 12) {
+            graficoOrdenado = graficoOrdenado.sublist(
+              graficoOrdenado.length - 12,
+            );
+          }
+          // ===================================================================
+
           return ListView(
             padding: const EdgeInsets.all(20),
             children: [
@@ -80,6 +158,14 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               _buildResumoCard(metricas, lancamentos.length),
+
+              // --- OS DOIS GRÁFICOS AQUI ---
+              const SizedBox(height: 16),
+              _buildBalancoLinhasCard(graficoOrdenado), // 1º Balanço Energético
+              const SizedBox(height: 16),
+              _buildFinanceiroCard(graficoOrdenado), // 2º Custo Evitado
+              // -----------------------------
+              const SizedBox(height: 16),
               _buildFluxoCreditosSection(lancamentos),
               const SizedBox(height: 24),
               const Text(
@@ -162,7 +248,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     );
   }
 
-  // --- O CARD COM A OBSERVAÇÃO LARANJA ACONTECE AQUI ---
   Widget _buildFluxoCreditosSection(
     List<LancamentoMensal> lancamentosAuditados,
   ) {
@@ -532,4 +617,447 @@ class AuditoriaIndividualScreen extends StatelessWidget {
       ],
     );
   }
+
+  // ===========================================================================
+  // COMPONENTES DOS GRÁFICOS
+  // ===========================================================================
+
+  Widget _buildBalancoLinhasCard(List<Map<String, dynamic>> dados) {
+    return _buildBaseCard(
+      titulo: usina.isGeradora ? "Balanço Energético" : "Histórico de Consumo",
+      icone: Icons.analytics_outlined,
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (usina.isGeradora) ...[
+                _buildLegendItem("Geração KWh", Colors.orange),
+                const SizedBox(width: 16),
+              ],
+              _buildLegendItem("Consumo Real KWh", Colors.blue),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (dados.isEmpty)
+            const SizedBox(
+              height: 240,
+              child: Center(
+                child: Text(
+                  "Sem dados suficientes",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 240,
+              width: double.infinity,
+              child: CustomPaint(
+                painter: _DoubleLineChartPainter(
+                  dados,
+                  usina.isGeradora
+                      ? Colors.orange
+                      : Colors
+                            .transparent, // Esconde a linha laranja se não for geradora
+                  Colors.blue,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBaseCard({
+    required String titulo,
+    required IconData icone,
+    required Widget child,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icone, size: 20, color: Colors.blueGrey),
+              const SizedBox(width: 8),
+              Text(
+                titulo,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                  color: Colors.blueGrey,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFinanceiroCard(List<Map<String, dynamic>> dados) {
+    return _buildBaseCard(
+      titulo: "Custo Evitado (Economia Isolada)",
+      icone: Icons.savings_outlined,
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _buildLegendItem(
+                "Sem Solar (Custo Projetado)",
+                Colors.grey.shade300,
+              ),
+              const SizedBox(width: 16),
+              _buildLegendItem("Com Solar (Custo Real)", Colors.green),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (dados.isEmpty)
+            const SizedBox(
+              height: 240,
+              child: Center(
+                child: Text(
+                  "Sem dados suficientes",
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            )
+          else
+            SizedBox(
+              height: 240,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: dados.map((d) {
+                  double maxVal = _getMaxVal(dados, [
+                    'custoProjetado',
+                    'custo',
+                  ]);
+                  double maxBarHeight = 175;
+
+                  double hFundo = (d['custoProjetado'] / maxVal) * maxBarHeight;
+                  double hFrente = (d['custo'] / maxVal) * maxBarHeight;
+
+                  return Expanded(
+                    child: _buildColSobreposta(
+                      d['mes'],
+                      d['custoProjetado'],
+                      d['custo'],
+                      hFundo,
+                      hFrente,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLegendItem(String label, Color color) {
+    return Row(
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            color: Colors.grey,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+
+  double _getMaxVal(List<Map<String, dynamic>> dados, List<String> keys) {
+    double m = 0;
+    for (var d in dados) {
+      for (var k in keys) {
+        if (d[k] > m) m = d[k];
+      }
+    }
+    return m == 0 ? 1 : m;
+  }
+
+  Widget _buildColSobreposta(
+    String mes,
+    double vFundo,
+    double vFrente,
+    double hFundo,
+    double hFrente,
+  ) {
+    hFundo = hFundo < 4 && vFundo > 0 ? 4 : hFundo;
+    hFrente = hFrente < 4 && vFrente > 0 ? 4 : hFrente;
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        if (vFundo > (vFrente + 1.0))
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              NumberFormat.compact().format(vFundo),
+              style: TextStyle(
+                fontSize: 8,
+                color: Colors.grey.shade400,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            NumberFormat.compact().format(vFrente),
+            style: const TextStyle(
+              fontSize: 9,
+              color: Colors.green,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: 24,
+          height: hFundo,
+          child: Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              Container(
+                width: 18,
+                height: hFundo,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              Container(
+                width: 10,
+                height: hFrente,
+                decoration: BoxDecoration(
+                  color: Colors.green,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          mes,
+          style: const TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.bold,
+            color: Colors.black54,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// Pintor Customizado para o Gráfico de DUAS Linhas (Balanço Energético)
+class _DoubleLineChartPainter extends CustomPainter {
+  final List<Map<String, dynamic>> dados;
+  final Color colorGeracao;
+  final Color colorConsumo;
+
+  _DoubleLineChartPainter(this.dados, this.colorGeracao, this.colorConsumo);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (dados.isEmpty) return;
+
+    double maxVal = 0;
+    for (var d in dados) {
+      if (d['geracao'] > maxVal) maxVal = d['geracao'];
+      if (d['consumo'] > maxVal) maxVal = d['consumo'];
+    }
+    if (maxVal == 0) maxVal = 1;
+
+    double paddingTop = 25.0;
+    double paddingBottom = 25.0;
+    double chartHeight = size.height - paddingTop - paddingBottom;
+    double chartBottomY = size.height - paddingBottom;
+
+    double marginX = 20.0;
+    double stepX =
+        (size.width - (marginX * 2)) /
+        (dados.length > 1 ? (dados.length - 1) : 1);
+
+    List<Offset> pointsG = [];
+    List<Offset> pointsC = [];
+
+    for (int i = 0; i < dados.length; i++) {
+      double x = marginX + (i * stepX);
+      double dyG =
+          paddingTop +
+          chartHeight -
+          ((dados[i]['geracao'] / maxVal) * chartHeight);
+      double dyC =
+          paddingTop +
+          chartHeight -
+          ((dados[i]['consumo'] / maxVal) * chartHeight);
+      pointsG.add(Offset(x, dyG));
+      pointsC.add(Offset(x, dyC));
+    }
+
+    _drawPath(
+      canvas,
+      size,
+      pointsC,
+      colorConsumo,
+      chartHeight,
+      paddingTop,
+      chartBottomY,
+    );
+
+    // Só desenha a linha de geração se a cor não for transparente (Usina Beneficiária)
+    if (colorGeracao != Colors.transparent) {
+      _drawPath(
+        canvas,
+        size,
+        pointsG,
+        colorGeracao,
+        chartHeight,
+        paddingTop,
+        chartBottomY,
+      );
+    }
+
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+
+    for (int i = 0; i < dados.length; i++) {
+      textPainter.text = TextSpan(
+        text: dados[i]['mes'],
+        style: const TextStyle(
+          fontSize: 9,
+          color: Colors.black54,
+          fontWeight: FontWeight.bold,
+        ),
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(pointsG[i].dx - (textPainter.width / 2), chartBottomY + 8),
+      );
+
+      if (colorGeracao != Colors.transparent && dados[i]['geracao'] > 0) {
+        textPainter.text = TextSpan(
+          text: NumberFormat.compact().format(dados[i]['geracao']),
+          style: TextStyle(
+            fontSize: 9,
+            color: colorGeracao,
+            fontWeight: FontWeight.bold,
+          ),
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(pointsG[i].dx - (textPainter.width / 2), pointsG[i].dy - 16),
+        );
+      }
+
+      if (dados[i]['consumo'] > 0) {
+        textPainter.text = TextSpan(
+          text: NumberFormat.compact().format(dados[i]['consumo']),
+          style: TextStyle(
+            fontSize: 9,
+            color: colorConsumo,
+            fontWeight: FontWeight.bold,
+          ),
+        );
+        textPainter.layout();
+        textPainter.paint(
+          canvas,
+          Offset(pointsC[i].dx - (textPainter.width / 2), pointsC[i].dy + 8),
+        );
+      }
+    }
+  }
+
+  void _drawPath(
+    Canvas canvas,
+    Size size,
+    List<Offset> points,
+    Color color,
+    double chartHeight,
+    double paddingTop,
+    double chartBottomY,
+  ) {
+    if (points.isEmpty) return;
+    final paintLine = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final paintDot = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final paintDotBorder = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+
+    final path = Path();
+    final fillPath = Path();
+
+    for (int i = 0; i < points.length; i++) {
+      if (i == 0) {
+        path.moveTo(points[i].dx, points[i].dy);
+        fillPath.moveTo(points[i].dx, chartBottomY);
+        fillPath.lineTo(points[i].dx, points[i].dy);
+      } else {
+        path.lineTo(points[i].dx, points[i].dy);
+        fillPath.lineTo(points[i].dx, points[i].dy);
+      }
+    }
+    fillPath.lineTo(points.last.dx, chartBottomY);
+    fillPath.close();
+
+    final gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [color.withValues(alpha: 0.15), color.withValues(alpha: 0.0)],
+    );
+    final paintFill = Paint()
+      ..shader = gradient.createShader(
+        Rect.fromLTWH(0, paddingTop, size.width, chartHeight),
+      );
+
+    canvas.drawPath(fillPath, paintFill);
+    canvas.drawPath(path, paintLine);
+
+    for (var p in points) {
+      canvas.drawCircle(p, 4, paintDot);
+      canvas.drawCircle(p, 4, paintDotBorder);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

@@ -2,7 +2,7 @@ name: solar_insight
 description: "Gestao inteligente de usinas solares e auditoria de creditos."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.0+7
 
 environment:
   sdk: ^3.9.2

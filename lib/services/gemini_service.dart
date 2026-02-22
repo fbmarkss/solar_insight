@@ -1,16 +1,21 @@
 // Caminho: lib/services/gemini_service.dart
-// Descrição: Serviço de Integração com o Google Gemini (Código Original Restaurado e Seguro).
+// Descrição: Serviço de Integração com o Google Gemini (Seguro, com Chaves Separadas Web/Mobile e Tratamento Claro de Erros).
 
 import 'dart:convert';
-import 'dart:typed_data';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // <--- Necessário para o kIsWeb
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class GeminiService {
   Future<Map<String, dynamic>?> analisarFaturaPdf(Uint8List pdfBytes) async {
     try {
-      final apiKey = dotenv.env['GEMINI_API_KEY']
+      // 1. O Flutter decide na hora qual chave puxar do arquivo de variáveis
+      String? chaveBruta = kIsWeb
+          ? dotenv.env['GEMINI_API_KEY_WEB']
+          : dotenv.env['GEMINI_API_KEY_ANDROID'];
+
+      // 2. Limpeza de segurança (remove aspas e colchetes residuais)
+      final apiKey = chaveBruta
           ?.replaceAll('"', '')
           .replaceAll("'", '')
           .replaceAll('[', '')
@@ -18,11 +23,13 @@ class GeminiService {
           .trim();
 
       if (apiKey == null || apiKey.isEmpty) {
-        debugPrint('Erro: Chave do Gemini não encontrada no env.txt ou vazia.');
-        return null;
+        // 🚨 NOVO: Dispara o erro claro em vez de retornar null
+        throw Exception(
+          'Chave da IA não encontrada para este dispositivo. Verifique o arquivo de configuração.',
+        );
       }
 
-      // 1. A SUA LISTA DE MODELOS À PROVA DE FALHAS (Restaurada)
+      // 3. LISTA DE MODELOS À PROVA DE FALHAS
       final modelosParaTestar = [
         'gemini-2.5-flash',
         'gemini-2.0-flash',
@@ -74,12 +81,14 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
       final prompt = TextPart(promptText);
       final pdfPart = DataPart('application/pdf', pdfBytes);
 
-      // 2. O SEU LOOP DE TENTATIVAS VIA SDK
+      // 🚨 NOVO: Variável para guardar o último erro do Google Cloud
+      String ultimoErro = '';
+
+      // 4. O SEU LOOP DE TENTATIVAS VIA SDK
       for (String nomeModelo in modelosParaTestar) {
         try {
           debugPrint('🤖 Tentando comunicar com o modelo: $nomeModelo...');
 
-          // A SUA ESTRUTURA ORIGINAL (Sem o responseMimeType que causava o bloqueio)
           final model = GenerativeModel(model: nomeModelo, apiKey: apiKey);
 
           final response = await model.generateContent([
@@ -89,9 +98,7 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
           if (response.text != null && response.text!.isNotEmpty) {
             debugPrint('✅ SUCESSO! O modelo $nomeModelo processou a fatura.');
 
-            // 3. LIMPEZA AVANÇADA DE DADOS
-            // Como removemos a trava da API, a IA VAI devolver o texto com marcações Markdown.
-            // Este filtro garante que extraímos apenas o JSON puro!
+            // 5. LIMPEZA AVANÇADA DE DADOS
             String jsonPuro = response.text!
                 .replaceAll('```json', '')
                 .replaceAll('```', '')
@@ -104,22 +111,26 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
               jsonPuro = jsonPuro.substring(startIndex, endIndex + 1);
               return jsonDecode(jsonPuro);
             } else {
-              debugPrint(
-                '❌ Erro: O texto retornado não contém um JSON válido.',
+              throw Exception(
+                'O texto retornado pela IA não contém um JSON válido.',
               );
             }
           }
         } catch (e) {
           debugPrint('❌ O modelo $nomeModelo falhou. Erro: $e');
-          // Continua o loop para testar o próximo modelo da lista
+          // 🚨 NOVO: Guarda o motivo da falha para mostrar na tela depois
+          ultimoErro = e.toString();
         }
       }
 
-      debugPrint('🚨 ERRO: Nenhum modelo foi aceite pela sua conta Google.');
-      return null;
+      // 🚨 NOVO: Se o loop terminou e não retornou o JSON, dispara o erro consolidado
+      throw Exception(
+        'Acesso bloqueado pela API ou falha de conexão.\nDetalhe: $ultimoErro',
+      );
     } catch (e) {
       debugPrint('🚨 Erro Fatal no GeminiService: $e');
-      return null;
+      // 🚨 NOVO: O 'rethrow' pega a Exception gerada aqui dentro e joga para a Tela do App
+      rethrow;
     }
   }
 }

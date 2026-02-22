@@ -89,32 +89,43 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
       _iniciarAnimacaoDeStatus();
 
       final geminiService = GeminiService();
-      Map<String, dynamic>? dadosExtraidos;
 
-      if (file.bytes != null) {
-        dadosExtraidos = await geminiService.analisarFaturaPdf(file.bytes!);
-      }
+      try {
+        if (file.bytes != null) {
+          // Tenta ler o PDF. Se falhar, pula direto para o 'catch' abaixo!
+          final dadosExtraidos = await geminiService.analisarFaturaPdf(
+            file.bytes!,
+          );
 
-      if (!mounted) return;
+          if (!mounted) return;
 
-      setState(() {
-        _isAnalyzing = false;
-      });
+          // Se chegou aqui, é porque deu sucesso absoluto!
+          if (dadosExtraidos != null) {
+            _mostrarSucesso('Fatura lida com sucesso! Redirecionando...');
 
-      if (dadosExtraidos != null) {
-        _mostrarSucesso('Fatura lida com sucesso! Redirecionando...');
-
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
-            Navigator.pop(context, dadosExtraidos);
+            Future.delayed(const Duration(seconds: 2), () {
+              if (mounted) {
+                Navigator.pop(context, dadosExtraidos);
+              }
+            });
           }
-        });
-      } else {
-        _mostrarErro(
-          'Não foi possível ler esta fatura. Verifique se o PDF é válido e tente novamente.',
-        );
+        }
+      } catch (e) {
+        // Apanha o bloqueio do Google Cloud (ou qualquer outro erro) e mostra na tela!
+        if (mounted) {
+          _mostrarErro(e.toString().replaceAll('Exception: ', ''));
+        }
+      } finally {
+        // O FINALLY é o nosso seguro de vida. Aconteça o que acontecer (erro ou sucesso),
+        // ele vai sempre desligar a animação e libertar a tela.
+        if (mounted) {
+          setState(() {
+            _isAnalyzing = false;
+          });
+        }
       }
     } else {
+      // Se o usuário cancelou a escolha do ficheiro
       setState(() {
         _isAnalyzing = false;
         _statusMessage = 'Aguardando documento...';

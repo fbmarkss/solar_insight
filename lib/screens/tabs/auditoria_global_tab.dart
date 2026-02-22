@@ -144,28 +144,47 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
             );
 
             double consumoReal = 0;
-            double energiaPoupada = 0;
+            double energiaEfetivamentePoupada = 0;
 
             if (u.isGeradora) {
               totalGeralGerado += l.geracaoTotalKwh;
               dadosMensais[key]!['geracao'] += l.geracaoTotalKwh;
 
+              // 1. AUTOCONSUMO: Gerado - Injetado (Limitado a zero para evitar valores negativos)
               double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
                   .clamp(0.0, double.infinity);
+
+              // 2. CONSUMO TOTAL DA INSTALAÇÃO: O que consumiu direto do painel + O que precisou puxar da rua
               consumoReal = autoconsumo + l.energiaConsumidaRedeKwh;
 
-              // A energia que a usina geradora evitou que você comprasse foi exatamente a geração total dela.
-              energiaPoupada = l.geracaoTotalKwh;
+              // 3. ENERGIA COMPENSADA: A concessionária só desconta da fatura o limite do que você puxou da rede.
+              double energiaCompensada = l.energiaInjetadaKwh.clamp(
+                0.0,
+                l.energiaConsumidaRedeKwh,
+              );
+
+              // 4. ECONOMIA REAL DO MÊS: O que deixou de comprar da rua (Autoconsumo) + O que a rede descontou (Compensada)
+              energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
             } else {
+              // USINA BENEFICIÁRIA (Apenas recebe créditos)
               consumoReal = l.energiaConsumidaRedeKwh;
 
-              // Para beneficiária, a energia evitada foi o crédito que ela recebeu e abateu.
-              energiaPoupada = l.energiaInjetadaKwh;
+              // Para beneficiária, assumimos que 'energiaInjetadaKwh' armazena o crédito recebido.
+              // Ela também só pode abater até o limite do que consumiu.
+              double energiaCompensada = l.energiaInjetadaKwh.clamp(
+                0.0,
+                l.energiaConsumidaRedeKwh,
+              );
+
+              energiaEfetivamentePoupada = energiaCompensada;
             }
 
-            // O Cálculo Perfeito e Incontestável:
-            // Custo Projetado = O que eu paguei + (Toda a energia que o painel fez o favor de me dar * Preço da Energia)
-            double economiaFinanceira = energiaPoupada * l.tarifaKwh;
+            // O NOVO CÁLCULO FINANCEIRO (Realista e Conservador)
+            // Economia = Apenas a energia que efetivamente evitou uma cobrança * Tarifa
+            double economiaFinanceira =
+                energiaEfetivamentePoupada * l.tarifaKwh;
+
+            // Custo Projetado = O que eu paguei de fato (fatura) + O que eu teria pago a mais (economia)
             double custoProjetado = l.valorFaturaR + economiaFinanceira;
 
             totalGeralConsumido += consumoReal;
