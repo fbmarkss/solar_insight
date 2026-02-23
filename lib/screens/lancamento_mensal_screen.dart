@@ -957,7 +957,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
                             ),
                             SizedBox(height: 4),
                             Text(
-                              'Envie o PDF e deixe a IA preencher tudo.',
+                              'Envie o PDF e deixe a IA preencher tudo. Clique aqui',
                               style: TextStyle(
                                 color: Colors.white70,
                                 fontSize: 13,

@@ -165,7 +165,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
               backgroundColor: Colors.deepOrange,
               icon: const Icon(Icons.add, color: Colors.white),
               label: const Text(
-                'Nova Usina',
+                'Nova Unidade',
                 style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,

@@ -434,7 +434,7 @@ class CalculadoraEnergetica {
         'tipo': 'fuga_dinheiro',
         'titulo': 'Fuga de Dinheiro (Multa)!',
         'mensagem':
-            'A unidade ${usina.nome} pagou R\$ ${ultimo.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa (ERE/DRE). Peça a um eletricista para avaliar o Banco de Capacitores.',
+            'A unidade **${usina.nome}** pagou R\$ ${ultimo.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa (ERE/DRE). Peça a um eletricista para avaliar o Banco de Capacitores.',
         'cor': 'red',
         'icone': 'bolt',
       });
@@ -496,23 +496,44 @@ class CalculadoraEnergetica {
 
     if (saldoMensal < 0) {
       double deficit = saldoMensal.abs();
-      // O global já conta com a subtração do mês atual que a MetricasGerais fez
-      if (saldoCreditosGlobal + deficit >= deficit) {
-        // Verifica se havia saldo antes do desconto
+
+      // Vai buscar a "verdade absoluta" do mês passado na base de dados
+      double saldoDoMesAnterior = 0.0;
+      if (historico.length >= 2) {
+        // historico[0] é o mês atual. historico[1] é o mês anterior.
+        saldoDoMesAnterior = historico[1].saldoInformadoNaFatura ?? 0.0;
+      }
+
+      // Cenário 1: Tinha "gordura" suficiente para queimar
+      if (saldoDoMesAnterior >= deficit) {
         alertas.add({
           'tipo': 'consumo_reserva',
           'titulo': 'Consumindo Reserva',
           'mensagem':
-              'Na unidade ${usina.nome}, o consumo superou o recebido. Você usou ${deficit.toStringAsFixed(0)} kWh do saldo acumulado.',
+              'A unidade **${usina.nome}** consumiu mais do que recebeu neste mês. O sistema utilizou ${deficit.toStringAsFixed(0)} kWh do seu Banco de Créditos para cobrir toda a diferença.',
           'cor': 'orange',
           'icone': 'hourglass_bottom',
         });
-      } else {
+      }
+      // Cenário 2: Tinha um restinho de saldo, mas não cobriu tudo
+      else if (saldoDoMesAnterior > 1.0) {
+        double faltou = deficit - saldoDoMesAnterior;
+        alertas.add({
+          'tipo': 'deficit_parcial',
+          'titulo': 'Reserva Insuficiente',
+          'mensagem':
+              'A unidade **${usina.nome}** precisou de ${deficit.toStringAsFixed(0)} kWh extras. Como o seu banco de créditos só tinha ${saldoDoMesAnterior.toStringAsFixed(0)} kWh, você esgotou a sua reserva e a diferença de ${faltou.toStringAsFixed(0)} kWh foi cobrada em Reais na fatura.',
+          'cor': 'red',
+          'icone': 'monetization_on',
+        });
+      }
+      // Cenário 3: O Banco de Créditos estava completamente zerado
+      else {
         alertas.add({
           'tipo': 'deficit_real',
-          'titulo': 'Gasto Superior ao Crédito',
+          'titulo': 'Fatura Descoberta (Pagamento Extra)',
           'mensagem':
-              '${usina.nome} não teve crédito suficiente para cobrir o consumo. Fatura virá alta.',
+              'A unidade **${usina.nome}** precisou de ${deficit.toStringAsFixed(0)} kWh extras para abater o consumo. Como você NÃO tinha saldo de créditos acumulado do passado, toda essa diferença foi cobrada em Reais na fatura.',
           'cor': 'red',
           'icone': 'monetization_on',
         });
@@ -540,9 +561,14 @@ class CalculadoraEnergetica {
               saldoMatematicoEsperado - saldoLidoNaFaturaAtual;
           alertas.add({
             'tipo': 'creditos_desviados',
-            'titulo': '🚨 ALERTA: Créditos Desviados!',
+            'titulo': '🚨 ALERTA: Créditos não lançados!',
             'mensagem':
-                'Auditoria Falhou: No mês passado você tinha ${saldoAnterior.toStringAsFixed(0)} kWh. Neste mês o seu saldo (sobra menos consumo) foi de ${(saldoMensal > 0 ? "+" : "")}${saldoMensal.toStringAsFixed(0)} kWh. \n\nO seu saldo correto deveria ser ${saldoMatematicoEsperado.toStringAsFixed(0)} kWh, mas a concessionária computou apenas ${saldoLidoNaFaturaAtual.toStringAsFixed(0)} kWh. Faltam ${creditosDesviados.toStringAsFixed(0)} kWh. Conteste a sua fatura!',
+                'A concessionária deixou de creditar  ${creditosDesviados.toStringAsFixed(0)} kWh no seu banco de créditos da Usina **${usina.nome}**!\n'
+                '• Saldo do mês anterior: ${saldoAnterior.toStringAsFixed(0)} kWh.\n'
+                '• Crédito deste mês: ${(saldoMensal > 0 ? "+" : "")}${saldoMensal.toStringAsFixed(0)} kWh.\n'
+                '• Saldo Total Esperado: ${saldoMatematicoEsperado.toStringAsFixed(0)} kWh.\n'
+                '• Saldo lançado/Impresso na Fatura: ${saldoLidoNaFaturaAtual.toStringAsFixed(0)} kWh.\n'
+                'Verifique seus lançamentos e conteste a sua fatura!',
             'cor': 'red',
             'icone': 'policy',
           });

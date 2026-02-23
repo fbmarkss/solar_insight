@@ -1,5 +1,5 @@
 // Caminho: lib/services/data_backup_service.dart
-// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA.
+// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA, CSV com Saldo.
 
 import 'dart:convert';
 import 'dart:io';
@@ -201,7 +201,7 @@ class DataBackupService {
   }
 
   // ===========================================================================
-  // --- PASSO 2: LANÇAMENTOS (DADOS) ---
+  // --- PASSO 2: LANÇAMENTOS (DADOS) - EXPORTAR E IMPORTAR CSV ---
   // ===========================================================================
 
   static Future<void> exportarRelatorioCsv(String nomeArquivo) async {
@@ -209,7 +209,8 @@ class DataBackupService {
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
 
     List<List<dynamic>> rows = [];
-    // O Relatório CSV simples não exporta tudo, é só pra visualização do utilizador. O Backup JSON é que faz o trabalho pesado.
+    // O Relatório CSV simples não exporta tudo, é só pra visualização do utilizador.
+    // O Backup JSON é que faz o trabalho pesado. (Adicionado Saldo Acumulado).
     rows.add([
       "ID_UC",
       "Nome da Usina",
@@ -221,6 +222,7 @@ class DataBackupService {
       "Fatura",
       "Demanda",
       "Leitura Inversor",
+      "Saldo Acumulado", // <--- NOVO CAMPO
     ]);
 
     final lancamentos = boxLancamentos.values
@@ -245,6 +247,10 @@ class DataBackupService {
         l.valorFaturaR.toString().replaceAll('.', ','),
         l.custoDemandaR.toString().replaceAll('.', ','),
         (l.leituraInversor ?? 0.0).toString().replaceAll('.', ','),
+        (l.saldoInformadoNaFatura ?? 0.0).toString().replaceAll(
+          '.',
+          ',',
+        ), // <--- NOVO CAMPO
       ]);
     }
 
@@ -321,6 +327,9 @@ class DataBackupService {
             valorFaturaR: _parseDouble(row[7]),
             custoDemandaR: row.length > 8 ? _parseDouble(row[8]) : 0.0,
             leituraInversor: row.length > 9 ? _parseDouble(row[9]) : 0.0,
+            saldoInformadoNaFatura: row.length > 10
+                ? _parseDouble(row[10])
+                : 0.0, // <--- NOVO CAMPO SEGURO
             tenantId: userCtx['empresaId'],
             criadoPor: userCtx['uid'],
             ultimaModificacao: agora,

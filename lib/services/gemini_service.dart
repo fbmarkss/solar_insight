@@ -23,7 +23,6 @@ class GeminiService {
           .trim();
 
       if (apiKey == null || apiKey.isEmpty) {
-        // 🚨 NOVO: Dispara o erro claro em vez de retornar null
         throw Exception(
           'Chave da IA não encontrada para este dispositivo. Verifique o arquivo de configuração.',
         );
@@ -39,21 +38,36 @@ class GeminiService {
         'gemini-1.5-pro',
       ];
 
+      // =======================================================================
+      // PROMPT SNIPER: Otimizado para EDP (Grupos A e B) e Santa Maria (Grupo B)
+      // =======================================================================
       const promptText = '''
-Você é um Engenheiro Eletricista especialista em faturamento de energia e regulamentação da ANEEL (Brasil), com foco em Geração Distribuída (Lei 14.300).
-Sua tarefa é analisar faturas de energia elétrica em PDF e extrair os dados com precisão cirúrgica, retornando EXCLUSIVAMENTE um objeto JSON válido.
+Você é um Engenheiro Eletricista e Auditor especialista em faturamento de energia e regulamentação da ANEEL (Brasil), com foco em Geração Distribuída (Lei 14.300).
+Sua tarefa é analisar a fatura de energia elétrica em PDF e extrair os dados reais, ignorando as linhas de compensação financeira.
+Retorne EXCLUSIVAMENTE um objeto JSON válido.
 
-REGRAS DE EXTRAÇÃO:
-1. CLASSIFICAÇÃO DA USINA: Identifique se a conta é do Grupo A (Verde/Azul) ou B (Convencional).
-2. CONSUMO E INJEÇÃO (kWh): 
-- Grupo A: Extraia Ponta, Fora Ponta e Reservado.
-- Grupo B: Extraia em 'unico'.
-- Injeção: Procure 'Energia Injetada', 'Energia Compensada GD' ou quadros de Microgeração.
-3. TARIFAS (R\$/kWh): Separe TE e TUSD. Extraia por posto tarifário se Grupo A.
-4. CUSTOS FIXOS E MULTAS (R\$): Demanda, Multa Reativo (ERE+DRE), Iluminação Pública (CIP/COSIP).
-5. DADOS FINANCEIROS: Mês/Ano de referência (Ex: "07/2025"), Valor Total, Saldo Acumulado.
+REGRAS RÍGIDAS DE EXTRAÇÃO:
+1. CLASSIFICAÇÃO DA USINA: 
+- Identifique se é Grupo A (Tensão > 2.3kV, ex: A4, Verde) ou Grupo B (Baixa Tensão).
 
-FORMATO DE SAÍDA OBRIGATÓRIO:
+2. CONSUMO REAL (kWh):
+- Se SANTA MARIA: Procure o quadro "Grandezas". O consumo real é o "Valor medido" da linha "Energia ativa consumo".
+- Se EDP GRUPO A: Some o consumo medido em Ponta, Fora Ponta e Reservado (busque no quadro Detalhes do Faturamento).
+- Se EDP GRUPO B: Busque o valor total de kWh da "Energia Ativa Fornecida".
+
+3. ENERGIA INJETADA (kWh) - A REGRA DE OURO PARA NÃO ERRAR:
+- 🚨 PROIBIDO: NUNCA pegue valores das linhas de faturamento com palavras como "Inj. mUC", "Consumo SCEE" ou valores negativos (-). Isso é compensação, não injeção.
+- Se SANTA MARIA: Procure EXCLUSIVAMENTE no quadro "Grandezas". A injeção é o "Valor medido" da linha "Energia ativa injetada".
+- Se EDP GRUPO B: Procure EXCLUSIVAMENTE no quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA" a linha "Energia Injetada no mês".
+- Se EDP GRUPO A: Procure no mesmo quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA". Separe os valores exatos de "Energia Injetada Ponta", "Energia Injetada Fora Ponta" e "Energia Injetada Reservado".
+
+4. TARIFAS E VALORES (R\$ e R\$/kWh):
+- Tarifas Grupo A (EDP): No final do PDF há linhas escritas "Tarifa ANEEL TUSD/TE Ponta" e "Tarifa ANEEL TUSD/TE FPonta". Extraia com todas as casas decimais.
+- Tarifas Grupo B: Extraia a tarifa unitária da linha de Consumo. Se a concessionária não separar TE e TUSD (como a Santa Maria), coloque o valor total em 'teUnica' e 0.0 em 'tusdUnica'.
+- Custos Adicionais: Demanda (R\$), Multa de Reativo (Procure por ERE ou DRE em R\$), Iluminação Pública (CIP/COSIP em R\$).
+- Saldo de Créditos: Procure por "Saldo Atualizado no mês" ou "Saldo atual".
+
+FORMATO DE SAÍDA OBRIGATÓRIO (NÃO USE MARKDOWN ```json, APENAS O TEXTO PURO):
 {
   "dadosGerais": {
     "mesReferencia": "MM/YYYY",
@@ -81,10 +95,8 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
       final prompt = TextPart(promptText);
       final pdfPart = DataPart('application/pdf', pdfBytes);
 
-      // 🚨 NOVO: Variável para guardar o último erro do Google Cloud
       String ultimoErro = '';
 
-      // 4. O SEU LOOP DE TENTATIVAS VIA SDK
       for (String nomeModelo in modelosParaTestar) {
         try {
           debugPrint('🤖 Tentando comunicar com o modelo: $nomeModelo...');
@@ -98,7 +110,6 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
           if (response.text != null && response.text!.isNotEmpty) {
             debugPrint('✅ SUCESSO! O modelo $nomeModelo processou a fatura.');
 
-            // 5. LIMPEZA AVANÇADA DE DADOS
             String jsonPuro = response.text!
                 .replaceAll('```json', '')
                 .replaceAll('```', '')
@@ -118,18 +129,15 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
           }
         } catch (e) {
           debugPrint('❌ O modelo $nomeModelo falhou. Erro: $e');
-          // 🚨 NOVO: Guarda o motivo da falha para mostrar na tela depois
           ultimoErro = e.toString();
         }
       }
 
-      // 🚨 NOVO: Se o loop terminou e não retornou o JSON, dispara o erro consolidado
       throw Exception(
         'Acesso bloqueado pela API ou falha de conexão.\nDetalhe: $ultimoErro',
       );
     } catch (e) {
       debugPrint('🚨 Erro Fatal no GeminiService: $e');
-      // 🚨 NOVO: O 'rethrow' pega a Exception gerada aqui dentro e joga para a Tela do App
       rethrow;
     }
   }

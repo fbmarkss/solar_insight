@@ -349,11 +349,11 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                         navContext,
                         usina: dash.usinaSelecionada,
                       ),
-                      backgroundColor: const Color.fromARGB(255, 136, 186, 90),
+                      backgroundColor: const Color.fromARGB(255, 38, 143, 230),
                       foregroundColor: Colors.white,
                       icon: const Icon(Icons.add),
                       label: const Text(
-                        'LANÇAMENTO',
+                        'Lançamento',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.5,

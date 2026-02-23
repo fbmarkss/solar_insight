@@ -815,6 +815,51 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       saldoFisico = creditoPratico - lancamento.energiaConsumidaRedeKwh;
     }
 
+    // =========================================================================
+    // A MÁGICA DO SALDO INTELIGENTE (ESTIMATIVA VS FATURA)
+    // =========================================================================
+    double saldoExibicao = lancamento.saldoInformadoNaFatura ?? 0.0;
+    bool isSaldoCalculado = false;
+
+    if (saldoExibicao == 0.0) {
+      final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
+      final historicoLocal = boxLanc.values
+          .where((l) => l.usinaId == widget.usina.id && !l.isDeletado)
+          .toList();
+      // Ordena do mais antigo para o mais novo
+      historicoLocal.sort(
+        (a, b) => a.dataReferencia.compareTo(b.dataReferencia),
+      );
+
+      int idx = historicoLocal.indexWhere((l) => l.id == lancamento.id);
+
+      if (idx > 0) {
+        // Pega o saldo da fatura do mês anterior
+        double saldoAnterior =
+            historicoLocal[idx - 1].saldoInformadoNaFatura ?? 0.0;
+
+        // Calcula a sobra real (descontando a taxa mínima da concessionária)
+        double taxaMin = 100.0;
+        if (widget.usina.tipo.toLowerCase().contains('monof')) taxaMin = 30.0;
+        if (widget.usina.tipo.toLowerCase().contains('bif')) taxaMin = 50.0;
+
+        double consumoAbativel = lancamento.energiaConsumidaRedeKwh > taxaMin
+            ? lancamento.energiaConsumidaRedeKwh - taxaMin
+            : 0.0;
+
+        double sobraDoMes = creditoPratico - consumoAbativel;
+
+        saldoExibicao = saldoAnterior + sobraDoMes;
+        if (saldoExibicao < 0) saldoExibicao = 0.0; // Saldo não fica negativo
+        isSaldoCalculado = true;
+      } else {
+        // Se for o primeiro mês cadastrado, pega só a sobra física
+        saldoExibicao = saldoFisico > 0 ? saldoFisico : 0.0;
+        isSaldoCalculado = true;
+      }
+    }
+    // =========================================================================
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -1143,6 +1188,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         ),
                       ),
                       const Divider(height: 30),
+                      const Divider(height: 30),
                       _buildSectionHeader(
                         'Balanço Financeiro (Energia)',
                         Icons.balance,
@@ -1192,7 +1238,10 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                               Padding(
                                 padding: const EdgeInsets.only(top: 6),
                                 child: Text(
-                                  "Atenção: O consumo superou os créditos recebidos. Esse déficit usará o saldo acumulado anterior ou será cobrado.",
+                                  // --- AQUI ENTRA A MENSAGEM DINÂMICA ---
+                                  saldoExibicao > 0
+                                      ? "Atenção: O consumo superou os créditos recebidos. Este déficit foi abatido do seu saldo acumulado anterior."
+                                      : "Atenção: O consumo superou os créditos recebidos. Como não havia saldo acumulado suficiente, a diferença foi cobrada na fatura.",
                                   style: TextStyle(
                                     fontSize: 11,
                                     color: Colors.red.shade800,
@@ -1201,6 +1250,43 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                   textAlign: TextAlign.center,
                                 ),
                               ),
+
+                            // --- CÓDIGO INSERIDO COM VARIÁVEIS INTELIGENTES ---
+                            const SizedBox(height: 12),
+                            Divider(
+                              color: saldoFisico >= 0
+                                  ? Colors.green.shade200
+                                  : Colors.red.shade200,
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  isSaldoCalculado
+                                      ? 'Saldo Acumulado (Estimado)'
+                                      : 'Saldo Acumulado (Fatura)',
+                                  style: TextStyle(
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.bold,
+                                    fontStyle: isSaldoCalculado
+                                        ? FontStyle.italic
+                                        : FontStyle.normal,
+                                  ),
+                                ),
+                                Text(
+                                  '${_numero.format(saldoExibicao)} kWh',
+                                  style: TextStyle(
+                                    color: isSaldoCalculado
+                                        ? Colors.orange.shade700
+                                        : Colors.blue,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            // --------------------------------------------------
                           ],
                         ),
                       ),

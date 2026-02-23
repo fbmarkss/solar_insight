@@ -222,7 +222,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final List<String> navTitulos = ['Visão Geral', 'Usinas', 'Auditoria'];
+    final List<String> navTitulos = ['Visão Geral', 'Unidades', 'Auditoria'];
     final List<IconData> navIcones = [
       Icons.dashboard_outlined,
       Icons.solar_power_outlined,
