@@ -1839,7 +1839,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
             Icon(Icons.policy, color: Colors.white, size: 20),
             SizedBox(width: 8),
             Text(
-              'Créditos Desviados',
+              'Créditos não compensados',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,

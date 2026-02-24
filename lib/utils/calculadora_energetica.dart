@@ -83,13 +83,50 @@ class CalculadoraEnergetica {
     return 100.0;
   }
 
+  // --- NOVO HELPER: FILTRO DE HISTÓRICO DE VIGÊNCIA ---
+  static Iterable<BeneficiariaItem> _obterBeneficiariasVigentes(
+    Usina usina,
+    DateTime dataFatura,
+  ) {
+    // Normaliza a data da fatura ignorando horas/minutos para precisão na comparação
+    DateTime dataRef = DateTime(
+      dataFatura.year,
+      dataFatura.month,
+      dataFatura.day,
+    );
+
+    return usina.beneficiarias.where((b) {
+      DateTime inicio = DateTime(
+        b.dataInicio.year,
+        b.dataInicio.month,
+        b.dataInicio.day,
+      );
+      bool aposInicio =
+          dataRef.isAfter(inicio) || dataRef.isAtSameMomentAs(inicio);
+
+      bool antesDoFim = true;
+      if (b.dataFim != null) {
+        DateTime fim = DateTime(
+          b.dataFim!.year,
+          b.dataFim!.month,
+          b.dataFim!.day,
+        );
+        antesDoFim = dataRef.isBefore(fim) || dataRef.isAtSameMomentAs(fim);
+      }
+
+      return aposInicio && antesDoFim;
+    });
+  }
+
   // --- HELPER CENTRALIZADO PARA EVITAR REPETIÇÃO DE CÓDIGO ---
   static double _calcularCreditoRecebidoLiquido(
     Usina usina,
     LancamentoMensal l,
   ) {
     if (usina.isGeradora) {
-      double percentualEnviado = usina.beneficiarias.fold(
+      // CIRÚRGICO: Agora usa apenas os percentuais vigentes na data deste lançamento
+      var vigentes = _obterBeneficiariasVigentes(usina, l.dataReferencia);
+      double percentualEnviado = vigentes.fold(
         0.0,
         (sum, b) => sum + b.percentual,
       );
@@ -100,16 +137,20 @@ class CalculadoraEnergetica {
       if (recebido == 0) {
         final boxUsinas = Hive.box<Usina>('usinas');
         final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
-        final maes = boxUsinas.values.where(
-          (u) =>
-              u.isGeradora &&
-              u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
-        );
+        // Busca as mães
+        final maes = boxUsinas.values.where((u) => u.isGeradora);
+
         for (var mae in maes) {
           try {
-            var vinculo = mae.beneficiarias.firstWhere(
+            // CIRÚRGICO: Verifica se ESTA filha estava ativa NAQUELA data na lista da mãe
+            var vigentesDaMae = _obterBeneficiariasVigentes(
+              mae,
+              l.dataReferencia,
+            );
+            var vinculo = vigentesDaMae.firstWhere(
               (b) => b.idUsinaFilha == usina.id,
             );
+
             var lancMae = boxLancamentos.values.firstWhere(
               (lm) =>
                   lm.usinaId == mae.id &&
@@ -337,7 +378,13 @@ class CalculadoraEnergetica {
     List<BalancoItem> relatorio = [];
     double injetadoTotal = lancamentoGeradora.energiaInjetadaKwh;
 
-    for (var vinculo in geradora.beneficiarias) {
+    // CIRÚRGICO: Calcula o relatório mensal da Geradora usando os vínculos vigentes daquele mês
+    var vigentes = _obterBeneficiariasVigentes(
+      geradora,
+      lancamentoGeradora.dataReferencia,
+    );
+
+    for (var vinculo in vigentes) {
       double creditoDireito = injetadoTotal * (vinculo.percentual / 100);
 
       var lancamentoFilha = boxLancamentos.values.firstWhere(
@@ -385,7 +432,8 @@ class CalculadoraEnergetica {
     }
 
     double percGeradora =
-        100 - geradora.beneficiarias.fold(0.0, (sum, b) => sum + b.percentual);
+        100 - vigentes.fold(0.0, (sum, b) => sum + b.percentual);
+
     if (percGeradora > 0) {
       double creditoGeradora = injetadoTotal * (percGeradora / 100);
 
@@ -623,7 +671,12 @@ class CalculadoraEnergetica {
     if (!geradora.isGeradora || geradora.beneficiarias.isEmpty) {
       return 0.0;
     }
-    double percentualTotalEnviado = geradora.beneficiarias.fold(
+    // CIRÚRGICO: Calcula apenas baseado no rateio vigente na fatura
+    var vigentes = _obterBeneficiariasVigentes(
+      geradora,
+      lancamentoMae.dataReferencia,
+    );
+    double percentualTotalEnviado = vigentes.fold(
       0.0,
       (sum, b) => sum + b.percentual,
     );
@@ -639,7 +692,12 @@ class CalculadoraEnergetica {
       return 0.0;
     }
     try {
-      final vinculo = geradora.beneficiarias.firstWhere(
+      // CIRÚRGICO: Busca apenas se o vínculo existia na data da fatura
+      var vigentes = _obterBeneficiariasVigentes(
+        geradora,
+        lancamentoMae.dataReferencia,
+      );
+      final vinculo = vigentes.firstWhere(
         (b) => b.idUsinaFilha == idUsinaFilha,
       );
       return lancamentoMae.energiaInjetadaKwh * (vinculo.percentual / 100);
@@ -694,7 +752,13 @@ class CalculadoraEnergetica {
 
         if (deficitDoMes > 0) {
           for (var mae in geradoras) {
-            if (mae.beneficiarias.any((b) => b.idUsinaFilha == filha.id)) {
+            // CIRÚRGICO: Avalia a oportunidade baseada na regra ativa no último mês fechado
+            var vigentesNaMae = _obterBeneficiariasVigentes(
+              mae,
+              ultimoLancamento.dataReferencia,
+            );
+
+            if (vigentesNaMae.any((b) => b.idUsinaFilha == filha.id)) {
               if (saldoDasMaes[mae.id] != null &&
                   saldoDasMaes[mae.id]! > deficitDoMes) {
                 alertasGerais.add({

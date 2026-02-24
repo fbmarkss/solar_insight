@@ -1,5 +1,5 @@
 // Caminho: lib/services/data_backup_service.dart
-// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA, CSV com Saldo.
+// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA, CSV com Saldo e Histórico de Rateio.
 
 import 'dart:convert';
 import 'dart:io';
@@ -228,7 +228,7 @@ class DataBackupService {
     final lancamentos = boxLancamentos.values
         .where((l) => !l.isDeletado)
         .toList();
-    lancamentos.sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
+    lancamentos.sort((a, b) => a.dataReferencia.compareTo(b.dataReferencia));
 
     for (var l in lancamentos) {
       String nomeUsina = "Desconhecida";
@@ -250,7 +250,7 @@ class DataBackupService {
         (l.saldoInformadoNaFatura ?? 0.0).toString().replaceAll(
           '.',
           ',',
-        ), // <--- NOVO CAMPO
+        ), // <--- CORRIGIDO AQUI
       ]);
     }
 
@@ -345,7 +345,7 @@ class DataBackupService {
   }
 
   // ===========================================================================
-  // --- BACKUP COMPLETO (JSON) INTEGRAL (COM CAMPOS DA IA) ---
+  // --- BACKUP COMPLETO (JSON) INTEGRAL (COM CAMPOS DA IA E HISTÓRICO RATEIO) ---
   // ===========================================================================
 
   static Future<void> exportarBackupJson(String nomeArquivo) async {
@@ -394,6 +394,9 @@ class DataBackupService {
                     'nome': b.nome,
                     'idUsinaFilha': b.idUsinaFilha,
                     'percentual': b.percentual,
+                    // --- NOVOS CAMPOS DO HISTÓRICO DE VIGÊNCIA ---
+                    'dataInicio': b.dataInicio.toIso8601String(),
+                    'dataFim': b.dataFim?.toIso8601String(),
                   },
                 )
                 .toList(),
@@ -433,7 +436,8 @@ class DataBackupService {
         .toList();
 
     final backupData = {
-      'versao': '1.3', // Subimos a versão do Backup por ter novos campos
+      'versao':
+          '1.4', // Subimos a versão do Backup por causa do Histórico de Rateio
       'dataBackup': DateTime.now().toIso8601String(),
       'usinas': usinasMap,
       'lancamentos': lancamentosMap,
@@ -553,6 +557,13 @@ class DataBackupService {
                 nome: ben['nome'],
                 idUsinaFilha: ben['idUsinaFilha'],
                 percentual: (ben['percentual'] as num).toDouble(),
+                // --- LEITURA COM PROTEÇÃO CONTRA BACKUPS ANTIGOS ---
+                dataInicio: ben['dataInicio'] != null
+                    ? DateTime.parse(ben['dataInicio'])
+                    : DateTime(2000, 1, 1),
+                dataFim: ben['dataFim'] != null
+                    ? DateTime.parse(ben['dataFim'])
+                    : null,
               ),
             );
           }

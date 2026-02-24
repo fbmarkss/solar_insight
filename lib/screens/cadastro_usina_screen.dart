@@ -314,16 +314,18 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   }
 
   void _vincularBeneficiaria() {
-    // --- VERIFICAÇÃO DO GUARDIÃO ANTES DE ABRIR A TELA DE VINCULAÇÃO ---
     final subProvider = Provider.of<SubscriptionProvider>(
       context,
       listen: false,
     );
 
-    // O Rateio na Geradora também conta para o limite se ele não for PRO
-    if (!subProvider.podeAdicionarUsinaFilha(_listaBeneficiarias.length)) {
+    // Usa apenas as filhas com vínculo vigente para calcular o limite
+    int totalFilhasAtivas = _listaBeneficiarias
+        .where((b) => b.dataFim == null)
+        .length;
+
+    if (!subProvider.podeAdicionarUsinaFilha(totalFilhasAtivas)) {
       if (subProvider.isAdmin) {
-        // ABRINDO A VITRINE SE FOR ADMIN
         Navigator.push(
           context,
           MaterialPageRoute(
@@ -334,7 +336,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
           ),
         );
       } else {
-        // MENSAGEM DE ERRO SE FOR FUNCIONÁRIO
         AppFeedback.show(
           context,
           "🔒 Limite de rateio atingido. Solicite ao administrador que faça o upgrade para o PRO.",
@@ -343,16 +344,20 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       }
       return;
     }
-    // ----------------------------------------------------------------------
 
     final percCtrl = TextEditingController();
+    DateTime dataSelecionada = DateTime.now();
+
     final candidatos = Hive.box<Usina>('usinas').values
         .where(
           (u) =>
               u.id != _ucController.text &&
               u.ativa &&
               !u.isDeletado &&
-              !_listaBeneficiarias.any((b) => b.idUsinaFilha == u.id),
+              // Não lista se já possui um vínculo ativo atual
+              !_listaBeneficiarias.any(
+                (b) => b.idUsinaFilha == u.id && b.dataFim == null,
+              ),
         )
         .toList();
 
@@ -373,74 +378,211 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-          left: 20,
-          right: 20,
-          top: 20,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildDialogTitle('Vincular Unidade', Icons.link),
-            const SizedBox(height: 20),
-            DropdownButtonFormField<Usina>(
-              items: candidatos
-                  .map(
-                    (u) => DropdownMenuItem(
-                      value: u,
-                      child: Text('${u.nome} (UC ${u.id})'),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (val) => selecionada = val,
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+            left: 20,
+            right: 20,
+            top: 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildDialogTitle('Vincular Unidade', Icons.link),
+              const SizedBox(height: 20),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  'Vigente a partir de: ${DateFormat('dd/MM/yyyy').format(dataSelecionada)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blueGrey,
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildStylishField(
-              controller: percCtrl,
-              label: 'Porcentagem (%)',
-              hint: 'Ex: 20',
-              icon: Icons.pie_chart,
-              isNumber: true,
-              suffix: '%',
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              onPressed: () {
-                if (selecionada != null && percCtrl.text.isNotEmpty) {
-                  setState(
-                    () => _listaBeneficiarias.add(
-                      BeneficiariaItem(
-                        nome: selecionada!.nome,
-                        idUsinaFilha: selecionada!.id,
-                        percentual: _parsePotencia(percCtrl.text),
-                      ),
-                    ),
+                trailing: const Icon(
+                  Icons.calendar_today,
+                  color: Colors.deepOrange,
+                ),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: dataSelecionada,
+                    firstDate: DateTime(
+                      2000,
+                    ), // Permite lançar histórico do passado
+                    lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
                   );
-                  Navigator.pop(context);
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.deepOrange,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  if (picked != null) {
+                    setModalState(() => dataSelecionada = picked);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<Usina>(
+                items: candidatos
+                    .map(
+                      (u) => DropdownMenuItem(
+                        value: u,
+                        child: Text('${u.nome} (UC ${u.id})'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (val) => selecionada = val,
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
               ),
-              child: const Text('VINCULAR'),
-            ),
-          ],
+              const SizedBox(height: 12),
+              _buildStylishField(
+                controller: percCtrl,
+                label: 'Porcentagem (%)',
+                hint: 'Ex: 20',
+                icon: Icons.pie_chart,
+                isNumber: true,
+                suffix: '%',
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  if (selecionada != null && percCtrl.text.isNotEmpty) {
+                    setState(
+                      () => _listaBeneficiarias.add(
+                        BeneficiariaItem(
+                          nome: selecionada!.nome,
+                          idUsinaFilha: selecionada!.id,
+                          percentual: _parsePotencia(percCtrl.text),
+                          dataInicio: dataSelecionada, // Salvando com Data
+                        ),
+                      ),
+                    );
+                    Navigator.pop(context);
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepOrange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: const Text('VINCULAR'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- NOVA FUNÇÃO PARA ALTERAR RATEIO SEM PERDER HISTÓRICO ---
+  void _alterarPercentual(BeneficiariaItem itemAtivo) {
+    final percCtrl = TextEditingController(
+      text: itemAtivo.percentual.toString(),
+    );
+    DateTime dataSelecionada = DateTime.now();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFFF5F7FA),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+            left: 20,
+            right: 20,
+            top: 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildDialogTitle(
+                'Alterar Rateio: ${itemAtivo.nome}',
+                Icons.edit_calendar,
+              ),
+              const SizedBox(height: 20),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  'Novo rateio válido a partir de:\n${DateFormat('dd/MM/yyyy').format(dataSelecionada)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blueGrey,
+                  ),
+                ),
+                trailing: const Icon(
+                  Icons.calendar_today,
+                  color: Colors.deepOrange,
+                ),
+                onTap: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: dataSelecionada,
+                    firstDate: itemAtivo
+                        .dataInicio, // A nova regra não pode conflitar com o início da atual
+                    lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+                  );
+                  if (picked != null) {
+                    setModalState(() => dataSelecionada = picked);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildStylishField(
+                controller: percCtrl,
+                label: 'Nova Porcentagem (%)',
+                hint: 'Ex: 40',
+                icon: Icons.pie_chart,
+                isNumber: true,
+                suffix: '%',
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  if (percCtrl.text.isNotEmpty) {
+                    setState(() {
+                      // 1. Encerra a regra anterior no dia anterior à nova data
+                      itemAtivo.dataFim = dataSelecionada.subtract(
+                        const Duration(days: 1),
+                      );
+
+                      // 2. Cria a nova regra vigente (dataFim = null)
+                      _listaBeneficiarias.add(
+                        BeneficiariaItem(
+                          nome: itemAtivo.nome,
+                          idUsinaFilha: itemAtivo.idUsinaFilha,
+                          percentual: _parsePotencia(percCtrl.text),
+                          dataInicio: dataSelecionada,
+                        ),
+                      );
+                    });
+                    Navigator.pop(context);
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepOrange,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                child: const Text('SALVAR NOVO RATEIO'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -700,10 +842,10 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   Widget build(BuildContext context) {
     bool isGeradora = _tipoSelecionado == tipoGeradora;
 
-    double totalRateio = _listaBeneficiarias.fold(
-      0.0,
-      (acc, item) => acc + item.percentual,
-    );
+    // A contagem da barra de rateio considera apenas as regras VIGENTES
+    double totalRateio = _listaBeneficiarias
+        .where((b) => b.dataFim == null)
+        .fold(0.0, (acc, item) => acc + item.percentual);
 
     double sobraGeradora = 100 - totalRateio;
     bool isCriador = widget.usinaParaEditar?.criadoPor == _currentUid;
@@ -784,14 +926,14 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                         tipoGeradora,
                         Icons.solar_power,
                         isBloqueado: !podeGeradora,
-                        isAdmin: subProvider.isAdmin, // <--- NOVO
+                        isAdmin: subProvider.isAdmin,
                       ),
                       _buildTypeOption(
                         'BENEFICIÁRIA',
                         tipoBeneficiaria,
                         Icons.home_work,
                         isBloqueado: !podeBeneficiaria,
-                        isAdmin: subProvider.isAdmin, // <--- NOVO
+                        isAdmin: subProvider.isAdmin,
                       ),
                     ],
                   ),
@@ -1203,16 +1345,42 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
             ],
           ),
         ),
-      ..._listaBeneficiarias.map(
-        (i) => ListTile(
-          title: Text(i.nome),
-          subtitle: Text('${i.percentual}%'),
-          trailing: IconButton(
-            icon: const Icon(Icons.link_off, color: Colors.red),
-            onPressed: () => setState(() => _listaBeneficiarias.remove(i)),
+
+      // FILTRA PARA EXIBIR APENAS AS VIGENTES NA TELA
+      ..._listaBeneficiarias
+          .where((b) => b.dataFim == null)
+          .map(
+            (i) => ListTile(
+              title: Text(
+                i.nome,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                'Rateio atual: ${i.percentual}%\nDesde: ${DateFormat('dd/MM/yyyy').format(i.dataInicio)}',
+              ),
+              isThreeLine: true,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.edit_calendar, color: Colors.blue),
+                    tooltip: 'Alterar Porcentagem/Data',
+                    onPressed: () => _alterarPercentual(i),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.link_off, color: Colors.red),
+                    tooltip: 'Remover Vínculo',
+                    onPressed: () => setState(() {
+                      // A lixeira remove todo o histórico daquela unidade filha para liberar a vaga
+                      _listaBeneficiarias.removeWhere(
+                        (b) => b.idUsinaFilha == i.idUsinaFilha,
+                      );
+                    }),
+                  ),
+                ],
+              ),
+            ),
           ),
-        ),
-      ),
     ],
   );
 

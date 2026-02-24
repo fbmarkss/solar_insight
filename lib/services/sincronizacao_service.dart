@@ -1,5 +1,5 @@
 // Caminho: lib/services/sincronizacao_service.dart
-// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA), Garbage Collector Agressivo.
+// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA e Rateios), Garbage Collector Agressivo.
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -463,6 +463,9 @@ class SincronizacaoService {
               'nome': b.nome,
               'idUsinaFilha': b.idUsinaFilha,
               'percentual': b.percentual,
+              // --- NOVOS CAMPOS PARA SINCRONIZAÇÃO NO FIRESTORE ---
+              'dataInicio': b.dataInicio.millisecondsSinceEpoch,
+              'dataFim': b.dataFim?.millisecondsSinceEpoch,
             },
           )
           .toList(),
@@ -514,6 +517,13 @@ class SincronizacaoService {
               nome: b['nome'] ?? '',
               idUsinaFilha: b['idUsinaFilha'] ?? '',
               percentual: (b['percentual'] as num).toDouble(),
+              // --- LEITURA DO FIRESTORE (Com proteção para cadastros antigos) ---
+              dataInicio: b['dataInicio'] != null
+                  ? _converterParaDateTime(b['dataInicio'])
+                  : DateTime(2000, 1, 1),
+              dataFim: b['dataFim'] != null
+                  ? _converterParaDateTime(b['dataFim'])
+                  : null,
             ),
           )
           .toList(),

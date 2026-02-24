@@ -137,6 +137,8 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextFormField(
                           controller: _emailController,
                           keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction
+                              .next, // <--- NOVO: Mostra "Próximo" no teclado do celular
                           decoration: InputDecoration(
                             labelText: "E-mail",
                             prefixIcon: const Icon(Icons.email_outlined),
@@ -155,6 +157,10 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextFormField(
                           controller: _senhaController,
                           obscureText: _obscurePassword,
+                          textInputAction: TextInputAction
+                              .done, // <--- NOVO: Mostra "Concluído/Ir" no celular
+                          onFieldSubmitted: (_) =>
+                              _fazerLogin(), // <--- NOVO: Ouve o ENTER no teclado (Web/Mobile)
                           decoration: InputDecoration(
                             labelText: "Senha",
                             prefixIcon: const Icon(Icons.lock_outline),

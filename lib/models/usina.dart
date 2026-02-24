@@ -1,5 +1,5 @@
 // Caminho: lib/models/usina.dart
-// Descrição: Modelo de dados da Usina (Atualizado para Multi-tenancy e Autoria).
+// Descrição: Modelo de dados da Usina (Atualizado para Multi-tenancy, Autoria e Histórico de Rateio).
 
 import 'package:hive/hive.dart';
 
@@ -175,15 +175,26 @@ class InvestimentoItem extends HiveObject {
 class BeneficiariaItem extends HiveObject {
   @HiveField(0)
   String nome;
+
   @HiveField(1)
   String idUsinaFilha;
+
   @HiveField(2)
   double percentual;
+
+  // --- NOVOS CAMPOS: HISTÓRICO DE VIGÊNCIA ---
+  @HiveField(3)
+  DateTime dataInicio;
+
+  @HiveField(4)
+  DateTime? dataFim;
 
   BeneficiariaItem({
     required this.nome,
     required this.idUsinaFilha,
     required this.percentual,
+    required this.dataInicio, // Agora é obrigatório
+    this.dataFim, // Nulo = Vigente atual
   });
 }
 
@@ -269,10 +280,6 @@ class UsinaAdapter extends TypeAdapter<Usina> {
           runtimeType == other.runtimeType &&
           typeId == other.typeId;
 }
-
-// (Mantenha os adaptadores auxiliares abaixo exatamente como estão: InversorItemAdapter, etc.)
-// ... (Código dos InversorItemAdapter, PainelItemAdapter etc. permanece igual)
-// Vou incluir aqui só para garantir que o arquivo fique completo e sem erros de compilação.
 
 class InversorItemAdapter extends TypeAdapter<InversorItem> {
   @override
@@ -391,6 +398,7 @@ class InvestimentoItemAdapter extends TypeAdapter<InvestimentoItem> {
 class BeneficiariaItemAdapter extends TypeAdapter<BeneficiariaItem> {
   @override
   final int typeId = 5;
+
   @override
   BeneficiariaItem read(BinaryReader reader) {
     final numOfFields = reader.readByte();
@@ -401,23 +409,33 @@ class BeneficiariaItemAdapter extends TypeAdapter<BeneficiariaItem> {
       nome: fields[0] as String,
       idUsinaFilha: fields[1] as String,
       percentual: fields[2] as double,
+      // Fallback para dados antigos: Aplica o rateio desde o ano 2000
+      dataInicio: fields.containsKey(3)
+          ? fields[3] as DateTime
+          : DateTime(2000, 1, 1),
+      dataFim: fields.containsKey(4) ? fields[4] as DateTime? : null,
     );
   }
 
   @override
   void write(BinaryWriter writer, BeneficiariaItem obj) {
     writer
-      ..writeByte(3)
+      ..writeByte(5) // ATENÇÃO: Aumentado para 5 campos
       ..writeByte(0)
       ..write(obj.nome)
       ..writeByte(1)
       ..write(obj.idUsinaFilha)
       ..writeByte(2)
-      ..write(obj.percentual);
+      ..write(obj.percentual)
+      ..writeByte(3) // NOVO CAMPO
+      ..write(obj.dataInicio)
+      ..writeByte(4) // NOVO CAMPO
+      ..write(obj.dataFim);
   }
 
   @override
   int get hashCode => typeId.hashCode;
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
