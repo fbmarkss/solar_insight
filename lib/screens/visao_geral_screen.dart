@@ -1,11 +1,11 @@
 // Caminho: lib/screens/visao_geral_screen.dart
-// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real e Alertas de Otimização de Rateio.
+// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real, Gráfico em Onda e Alertas Modernos.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:http/http.dart' as http;
 
@@ -53,16 +53,13 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     }
   }
 
-  // --- INTEGRAÇÃO HG BRASIL (WEB) ---
   // --- INTEGRAÇÃO HG BRASIL (WEB) BLINDADA CONTRA CORS ---
   Future<void> _buscarClimaReal() async {
     const String urlOriginal =
         'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd&user_ip=remote';
 
     try {
-      // 1. TENTA A ROTA DIRETA (Rápida e nativa. Funciona no Android e na URL principal)
       final response = await http.get(Uri.parse(urlOriginal));
-
       if (response.statusCode == 200) {
         _processarRespostaClima(response.body);
       } else {
@@ -72,28 +69,22 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       debugPrint(
         'Bloqueio de CORS na rota direta. Tentando Proxy alternativo...',
       );
-
-      // 2. PLANO B: PROXY DE CORS
-      // (Engana a restrição do navegador para os seus outros domínios: web.app e fabianomarques.com.br)
       try {
         final proxyUrl = Uri.parse(
           'https://api.allorigins.win/raw?url=${Uri.encodeComponent(urlOriginal)}',
         );
         final responseProxy = await http.get(proxyUrl);
-
         if (responseProxy.statusCode == 200) {
           _processarRespostaClima(responseProxy.body);
         } else {
           _definirClimaIndisponivel();
         }
       } catch (e2) {
-        debugPrint('Erro no Proxy: $e2');
         _definirClimaIndisponivel();
       }
     }
   }
 
-  // --- Helpers para manter o código do clima limpo ---
   void _processarRespostaClima(String responseBody) {
     try {
       final data = json.decode(responseBody);
@@ -149,7 +140,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     if (slug.contains('rain') || slug.contains('storm')) return Colors.blue;
     return Colors.blueGrey;
   }
-  // ------------------------------------
 
   // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
   Future<void> _handleRefresh() async {
@@ -175,7 +165,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     }
   }
 
-  // --- LÓGICA MESTRA DE NAVEGAÇÃO ---
   void _abrirLancamento(
     bool isWeb,
     BuildContext localContext, {
@@ -296,12 +285,10 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         Widget filtro = _buildFiltro(dash);
         Widget cardAmbiental = _buildEnvironmentalCard(dash.totalGerado);
 
-        // --- BUSCANDO OS ALERTAS DE OTIMIZAÇÃO GERAL ---
         List<Map<String, dynamic>> alertasTotais = List.from(
           dash.alertasDoSistema,
         );
 
-        // Só mostra alerta de otimização se estiver olhando a visão "Todas as Unidades"
         if (dash.usinaSelecionada == null) {
           alertasTotais.addAll(
             CalculadoraEnergetica.gerarAlertaDeOtimizacaoDeRateio(),
@@ -340,7 +327,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                       isWeb,
                       alertasTotais,
                     ),
-
               floatingActionButton: isWidePanel
                   ? null
                   : FloatingActionButton.extended(
@@ -456,7 +442,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
               ],
             ),
             const SizedBox(height: 32),
-
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -465,7 +450,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _buildMainChartCard(dash),
+                      _buildWaveChartCard(dash),
                       const SizedBox(height: 24),
                       Row(
                         children: [
@@ -580,7 +565,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           const SizedBox(height: 24),
           filtro,
           const SizedBox(height: 24),
-          _buildMainChartCard(dash, isMobile: true),
+          _buildWaveChartCard(dash, isMobile: true),
           const SizedBox(height: 24),
           _buildCardEconomia(dash),
           const SizedBox(height: 16),
@@ -608,7 +593,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             const Padding(
               padding: EdgeInsets.only(left: 4, bottom: 12),
               child: Text(
-                'NOTIFICAÇÕES DE GESTÃO',
+                'NOTIFICAÇÕES E ALERTAS',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Colors.blueGrey,
@@ -617,7 +602,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                 ),
               ),
             ),
-            ...alertasCompletos.map((alerta) => _buildAlertaDiscreto(alerta)),
+            ...alertasCompletos.map((alerta) => _buildModernAlertCard(alerta)),
           ],
           const SizedBox(height: 100),
         ],
@@ -626,7 +611,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
 
   // ===========================================================================
-  // WIDGETS DE ALERTAS
+  // WIDGETS DE ALERTAS (NOVO DESIGN CLEAN)
   // ===========================================================================
 
   Widget _buildAlertasSection(List<Map<String, dynamic>> alertas) {
@@ -635,61 +620,62 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Atenção Necessária',
+          'Notificações de Gestão',
           style: TextStyle(
             fontWeight: FontWeight.bold,
-            fontSize: 16,
+            fontSize: 18,
             color: Colors.blueGrey,
           ),
         ),
-        const SizedBox(height: 12),
-        ...alertas.map((alerta) => _buildAlertaDiscreto(alerta, isWeb: true)),
+        const SizedBox(height: 16),
+        ...alertas.map((alerta) => _buildModernAlertCard(alerta)),
       ],
     );
   }
 
-  Widget _buildAlertaDiscreto(
-    Map<String, dynamic> alerta, {
-    bool isWeb = false,
-  }) {
+  Widget _buildModernAlertCard(Map<String, dynamic> alerta) {
     Color cor;
-    String prioridade = 'Média';
-    Color prioridadeCor = Colors.orange;
+    Color corFundoIcone;
+    String titulo = alerta['titulo'] ?? 'Aviso';
 
+    // Define cores baseadas no tipo ou na cor informada pelo motor
     if (alerta['tipo'] == 'otimizacao_rateio') {
       cor = Colors.green.shade600;
-      prioridade = 'Oportunidade';
-      prioridadeCor = Colors.green;
-    } else if (alerta['cor'] == 'red') {
-      cor = Colors.red.shade700;
-      prioridade = 'Alta';
-      prioridadeCor = Colors.red;
+      corFundoIcone = Colors.green.shade50;
+    } else if (alerta['cor'] == 'red' ||
+        alerta['tipo'] == 'creditos_desviados' ||
+        alerta['tipo'] == 'deficit_real') {
+      cor = Colors.red.shade600;
+      corFundoIcone = Colors.red.shade50;
     } else {
-      cor = Colors.orange.shade700;
+      cor = Colors.orange.shade600;
+      corFundoIcone = Colors.orange.shade50;
     }
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: isWeb
-            ? Border(left: BorderSide(color: prioridadeCor, width: 4))
-            : null,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color.fromARGB(97, 48, 101, 248)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: corFundoIcone,
+              shape: BoxShape.circle,
+            ),
             child: Icon(_getIconForType(alerta['tipo']), color: cor, size: 24),
           ),
           const SizedBox(width: 16),
@@ -697,48 +683,23 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        alerta['titulo'],
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: alerta['tipo'] == 'otimizacao_rateio'
-                              ? Colors.green.shade800
-                              : Colors.black87,
-                        ),
-                      ),
-                    ),
-                    if (isWeb) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: prioridadeCor.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          prioridade,
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            color: prioridadeCor,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+                const SizedBox(height: 2),
+                Text(
+                  titulo.replaceAll(
+                    '🚨 ',
+                    '',
+                  ), // Removemos o emoji se vier do motor para ficar clean
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blueGrey.shade900,
+                  ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 Text(
                   alerta['mensagem'],
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     color: Colors.grey.shade600,
                     height: 1.4,
                   ),
@@ -746,11 +707,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
               ],
             ),
           ),
-          if (isWeb)
-            Padding(
-              padding: const EdgeInsets.only(top: 8.0),
-              child: Icon(Icons.chevron_right, color: Colors.grey.shade400),
-            ),
         ],
       ),
     );
@@ -759,102 +715,41 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   IconData _getIconForType(String? tipo) {
     switch (tipo) {
       case 'baixa_producao':
-        return Icons.warning_amber_rounded;
       case 'queda_acentuada':
         return Icons.trending_down_rounded;
       case 'consumo_reserva':
         return Icons.hourglass_bottom_rounded;
       case 'deficit_real':
-        return Icons.error_outline_rounded;
-      case 'distribuicao':
-        return Icons.alt_route_rounded;
+      case 'deficit_parcial':
+      case 'custo_fixo_alto':
+        return Icons.monetization_on_outlined;
+      case 'creditos_desviados':
+        return Icons.policy_outlined;
       case 'otimizacao_rateio':
-        return Icons.lightbulb_circle;
+        return Icons.lightbulb_outline_rounded;
+      case 'fuga_dinheiro':
+        return Icons.bolt_rounded;
       default:
         return Icons.info_outline_rounded;
     }
   }
 
   // ===========================================================================
-  // WIDGETS COMUNS E CARTÕES DE RESUMO
+  // NOVO GRÁFICO DE ONDA (SPLINE)
   // ===========================================================================
-
-  Widget _buildFiltro(DashboardProvider dash) {
-    final usinasGeradoras = dash
-        .getTodasUsinas()
-        .where((u) => u.isGeradora)
-        .toList();
-    Usina? usinaValidaParaDropdown;
-    if (dash.usinaSelecionada != null && dash.usinaSelecionada!.isGeradora) {
-      usinaValidaParaDropdown = dash.usinaSelecionada;
-    }
-
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<Usina?>(
-          value: usinaValidaParaDropdown,
-          hint: const Text('Todas as Geradoras'),
-          isExpanded: true,
-          icon: const Icon(Icons.filter_list, color: Colors.deepOrange),
-          items: [
-            const DropdownMenuItem<Usina?>(
-              value: null,
-              child: Text(
-                'Todas as Geradoras',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-            ...usinasGeradoras.map(
-              (usina) => DropdownMenuItem<Usina?>(
-                value: usina,
-                child: Text(usina.nome, overflow: TextOverflow.ellipsis),
-              ),
-            ),
-          ],
-          onChanged: (u) => dash.selecionarUsina(u),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMainChartCard(DashboardProvider dash, {bool isMobile = false}) {
+  Widget _buildWaveChartCard(DashboardProvider dash, {bool isMobile = false}) {
     List<MapEntry<DateTime, double>> dados = _obterDadosGrafico(dash);
     double totalPeriodo = 0;
-    double maxGeracao = 0;
     for (var d in dados) {
       totalPeriodo += d.value;
-      if (d.value > maxGeracao) maxGeracao = d.value;
     }
-    if (maxGeracao == 0) maxGeracao = 1;
-
-    const mesesAbrev = [
-      'Jan',
-      'Fev',
-      'Mar',
-      'Abr',
-      'Mai',
-      'Jun',
-      'Jul',
-      'Ago',
-      'Set',
-      'Out',
-      'Nov',
-      'Dez',
-    ];
 
     return Container(
       height: isMobile ? 300 : 340,
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Colors.blueGrey.shade800, Colors.blueGrey.shade900],
+          colors: [Colors.blueGrey.shade900, Colors.black87],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -904,7 +799,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                 ),
                 child: const Row(
                   children: [
-                    Icon(Icons.bar_chart, color: Colors.greenAccent, size: 16),
+                    Icon(Icons.waves, color: Colors.orangeAccent, size: 16),
                     SizedBox(width: 6),
                     Text(
                       'Produção',
@@ -917,82 +812,71 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           ),
           const SizedBox(height: 24),
           if (dados.isEmpty)
-            Center(
-              child: Text(
-                'Nenhum lançamento encontrado.',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
+            Expanded(
+              child: Center(
+                child: Text(
+                  'Nenhum lançamento encontrado.',
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
+                ),
               ),
             )
           else
             Expanded(
-              child: LayoutBuilder(
-                builder: (context, box) {
-                  final width = box.maxWidth;
-                  final espacamento = 10.0;
-                  final barWidth = (width / dados.length) - espacamento;
-                  double maxBarHeight = box.maxHeight - 50;
-                  if (maxBarHeight < 10) maxBarHeight = 10;
-
-                  return Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: dados.map((entry) {
-                      final data = entry.key;
-                      final valor = entry.value;
-                      final barHeight = (valor / maxGeracao) * maxBarHeight;
-                      final isUltimoMes = entry == dados.last;
-
-                      return Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Text(
-                            NumberFormat.compact().format(valor),
-                            style: TextStyle(
-                              color: isUltimoMes
-                                  ? Colors.orange
-                                  : Colors.white.withValues(alpha: 0.7),
-                              fontSize: 10,
-                              fontWeight: isUltimoMes
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Tooltip(
-                            message:
-                                '${mesesAbrev[data.month - 1]} ${data.year}\n${valor.toStringAsFixed(1)} kWh',
-                            child: Container(
-                              width: barWidth,
-                              height: barHeight > 0 ? barHeight : 4,
-                              decoration: BoxDecoration(
-                                color: isUltimoMes
-                                    ? Colors.orange
-                                    : Colors.white.withValues(alpha: 0.8),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            mesesAbrev[data.month - 1],
-                            style: TextStyle(
-                              color: isUltimoMes
-                                  ? Colors.orange
-                                  : Colors.white.withValues(alpha: 0.6),
-                              fontSize: 11,
-                              fontWeight: isUltimoMes
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                        ],
-                      );
-                    }).toList(),
-                  );
-                },
+              child: CustomPaint(
+                painter: _WaveChartPainter(dados),
+                child: Container(), // Espaço preenchido pelo painter
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // WIDGETS COMUNS E CARTÕES DE RESUMO
+  // ===========================================================================
+
+  Widget _buildFiltro(DashboardProvider dash) {
+    final usinasGeradoras = dash
+        .getTodasUsinas()
+        .where((u) => u.isGeradora)
+        .toList();
+    Usina? usinaValidaParaDropdown;
+    if (dash.usinaSelecionada != null && dash.usinaSelecionada!.isGeradora) {
+      usinaValidaParaDropdown = dash.usinaSelecionada;
+    }
+
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<Usina?>(
+          value: usinaValidaParaDropdown,
+          hint: const Text('Todas as Geradoras'),
+          isExpanded: true,
+          icon: const Icon(Icons.filter_list, color: Colors.deepOrange),
+          items: [
+            const DropdownMenuItem<Usina?>(
+              value: null,
+              child: Text(
+                'Todas as Geradoras',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            ...usinasGeradoras.map(
+              (usina) => DropdownMenuItem<Usina?>(
+                value: usina,
+                child: Text(usina.nome, overflow: TextOverflow.ellipsis),
+              ),
+            ),
+          ],
+          onChanged: (u) => dash.selecionarUsina(u),
+        ),
       ),
     );
   }
@@ -1547,7 +1431,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   Widget _buildListaDistribuicaoGeradora(DashboardProvider dash) {
     if (dash.usinaSelecionada == null ||
         dash.usinaSelecionada!.beneficiarias.isEmpty) {
-      return const SizedBox.shrink(); // Não mostra se for global ou se não tiver filhas
+      return const SizedBox.shrink();
     }
 
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
@@ -1591,7 +1475,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           ),
           const SizedBox(height: 12),
           ...dash.usinaSelecionada!.beneficiarias.map((b) {
-            // 1. Cálculo Teórico (O Direito da Beneficiária)
             double repasseTeorico =
                 CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
                   dash.usinaSelecionada!,
@@ -1599,7 +1482,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                   b.idUsinaFilha,
                 );
 
-            // 2. Busca do Valor Real Inserido no lançamento da Beneficiária
             double repasseReal = 0;
             bool temLancamentoReal = false;
 
@@ -1611,16 +1493,12 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                     l.dataReferencia.year == ultimo.dataReferencia.year &&
                     l.dataReferencia.month == ultimo.dataReferencia.month,
               );
-              // Na beneficiária, o crédito recebido (inserido manualmente) fica no campo Injetada
               if (lancFilha.energiaInjetadaKwh > 0) {
                 repasseReal = lancFilha.energiaInjetadaKwh;
                 temLancamentoReal = true;
               }
-            } catch (_) {
-              // Filha ainda não tem lançamento neste mês
-            }
+            } catch (_) {}
 
-            // Define o que será exibido (Prioridade para o Real/Inserido)
             double valorExibido = temLancamentoReal
                 ? repasseReal
                 : repasseTeorico;
@@ -1646,18 +1524,17 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        '${numeroFormat.format(valorExibido)} kWh Real enviado',
+                        '${numeroFormat.format(valorExibido)} kWh Real',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
                           color: Colors.blue.shade700,
                         ),
                       ),
-                      // Exibe aviso se o que a pessoa inseriu for menor que o teórico
                       if (temLancamentoReal &&
                           (repasseTeorico - repasseReal) > 0.5)
                         Text(
-                          'Teórico Calculado: ${numeroFormat.format(repasseTeorico)} kWh',
+                          'Teórico: ${numeroFormat.format(repasseTeorico)} kWh',
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
@@ -1669,7 +1546,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                           'Teórico (Pendente Lanc.)',
                           style: TextStyle(
                             fontSize: 9,
-                            color: Colors.blueGrey.shade300,
+                            color: Colors.blueGrey.shade400,
                           ),
                         ),
                     ],
@@ -1712,7 +1589,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             ),
           ],
         ),
-        // --- A LISTA AGORA FICA ABAIXO DOS DOIS CARDS OCUPANDO TODA A LARGURA ---
         _buildListaDistribuicaoGeradora(dash),
       ],
     );
@@ -1887,4 +1763,182 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       ),
     );
   }
+}
+
+// ===========================================================================
+// PAINTER DO GRÁFICO EM ONDA (CURVAS DE BEZIER)
+// ===========================================================================
+class _WaveChartPainter extends CustomPainter {
+  final List<MapEntry<DateTime, double>> dados;
+  _WaveChartPainter(this.dados);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (dados.isEmpty) return;
+
+    double maxVal = 0;
+    for (var d in dados) {
+      if (d.value > maxVal) maxVal = d.value;
+    }
+    if (maxVal == 0) maxVal = 1;
+
+    // Área do gráfico
+    double paddingTop = 40.0;
+    double paddingBottom = 30.0;
+    double chartHeight = size.height - paddingTop - paddingBottom;
+    double chartBottomY = size.height - paddingBottom;
+
+    double marginX = 20.0;
+    double stepX = dados.length > 1
+        ? (size.width - (marginX * 2)) / (dados.length - 1)
+        : size.width / 2;
+
+    List<Offset> points = [];
+
+    // Calcula os pontos X,Y
+    for (int i = 0; i < dados.length; i++) {
+      double x = marginX + (i * stepX);
+      if (dados.length == 1) x = size.width / 2; // Centraliza se for só 1 dado
+
+      double dy =
+          paddingTop + chartHeight - ((dados[i].value / maxVal) * chartHeight);
+      points.add(Offset(x, dy));
+    }
+
+    final path = Path();
+    final fillPath = Path();
+
+    if (points.length == 1) {
+      // Se houver apenas 1 ponto, desenha uma linha reta simples
+      path.moveTo(marginX, points[0].dy);
+      path.lineTo(size.width - marginX, points[0].dy);
+
+      fillPath.moveTo(marginX, chartBottomY);
+      fillPath.lineTo(marginX, points[0].dy);
+      fillPath.lineTo(size.width - marginX, points[0].dy);
+      fillPath.lineTo(size.width - marginX, chartBottomY);
+    } else {
+      // Cria a Curva de Bézier para a Onda
+      path.moveTo(points[0].dx, points[0].dy);
+      fillPath.moveTo(points[0].dx, chartBottomY);
+      fillPath.lineTo(points[0].dx, points[0].dy);
+
+      for (int i = 0; i < points.length - 1; i++) {
+        final p0 = points[i];
+        final p1 = points[i + 1];
+
+        // Pontos de controle para suavizar a curva
+        final controlPointX = p0.dx + (p1.dx - p0.dx) / 2;
+
+        path.cubicTo(controlPointX, p0.dy, controlPointX, p1.dy, p1.dx, p1.dy);
+
+        fillPath.cubicTo(
+          controlPointX,
+          p0.dy,
+          controlPointX,
+          p1.dy,
+          p1.dx,
+          p1.dy,
+        );
+      }
+      fillPath.lineTo(points.last.dx, chartBottomY);
+    }
+
+    fillPath.close();
+
+    // Gradiente abaixo da onda
+    final gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Colors.orangeAccent.withValues(alpha: 0.4),
+        Colors.orangeAccent.withValues(alpha: 0.0),
+      ],
+    );
+
+    final paintFill = Paint()
+      ..shader = gradient.createShader(
+        Rect.fromLTWH(0, paddingTop, size.width, chartHeight),
+      );
+
+    // Pincel da linha da onda
+    final paintLine = Paint()
+      ..color = Colors.orangeAccent
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawPath(fillPath, paintFill);
+    canvas.drawPath(path, paintLine);
+
+    // Desenha os pontos e os textos
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    final mesesAbrev = [
+      'Jan',
+      'Fev',
+      'Mar',
+      'Abr',
+      'Mai',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Set',
+      'Out',
+      'Nov',
+      'Dez',
+    ];
+
+    final paintDot = Paint()
+      ..color = Colors.blueGrey.shade900
+      ..style = PaintingStyle.fill;
+    final paintDotBorder = Paint()
+      ..color = Colors.orangeAccent
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke;
+
+    for (int i = 0; i < points.length; i++) {
+      // O ponto (bolinha)
+      canvas.drawCircle(points[i], 5, paintDot);
+      canvas.drawCircle(points[i], 5, paintDotBorder);
+
+      // Texto do Mês (Eixo X)
+      String mesLabel = mesesAbrev[dados[i].key.month - 1];
+      textPainter.text = TextSpan(
+        text: mesLabel,
+        style: TextStyle(
+          color: Colors.white.withValues(alpha: 0.6),
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+        ),
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(points[i].dx - (textPainter.width / 2), chartBottomY + 12),
+      );
+
+      // Texto do Valor (Acima do Ponto)
+      double valor = dados[i].value;
+      String valorFormatado = valor >= 1000
+          ? '${(valor / 1000).toStringAsFixed(1).replaceAll('.0', '')}k'
+          : valor.toStringAsFixed(0);
+
+      textPainter.text = TextSpan(
+        text: valorFormatado,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(points[i].dx - (textPainter.width / 2), points[i].dy - 24),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

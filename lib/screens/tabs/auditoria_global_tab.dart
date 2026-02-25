@@ -1,5 +1,5 @@
 // Caminho: lib/screens/tabs/auditoria_global_tab.dart
-// Descrição: Aba de Análise Global com Custo Projetado corrigido via Fonte Única de Verdade (Calculadora).
+// Descrição: Aba de Análise Global com Filtro Dinâmico Inteligente e Gráficos em Onda.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -18,7 +18,8 @@ class AuditoriaGlobalTab extends StatefulWidget {
 }
 
 class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
-  String _filtroSelecionado = '6M';
+  // Mudamos o padrão para TUDO, assim não esconde dados antigos ao importar CSV
+  String _filtroSelecionado = 'TUDO';
 
   Future<void> _handleRefresh(BuildContext context) async {
     try {
@@ -40,36 +41,35 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     }
   }
 
-  List<LancamentoMensal> _filtrarLancamentos(List<LancamentoMensal> todos) {
-    DateTime agora = DateTime.now();
+  // Novo Filtro Baseado na Data Mais Recente do Banco de Dados
+  bool _isDentroDoFiltro(DateTime dataRef, DateTime dataBase) {
+    if (_filtroSelecionado == 'TUDO') return true;
+
     DateTime dataLimite;
 
     if (_filtroSelecionado == '6M') {
-      dataLimite = DateTime(agora.year, agora.month - 5, 1);
+      dataLimite = DateTime(dataBase.year, dataBase.month - 5, 1);
     } else if (_filtroSelecionado == '12M') {
-      dataLimite = DateTime(agora.year, agora.month - 11, 1);
+      dataLimite = DateTime(dataBase.year, dataBase.month - 11, 1);
     } else {
-      dataLimite = DateTime(agora.year, 1, 1);
+      // ANO
+      dataLimite = DateTime(dataBase.year, 1, 1);
     }
 
-    return todos.where((l) {
-      if (l.isDeletado) return false;
-      if (_filtroSelecionado == 'ANO' && l.dataReferencia.year != agora.year) {
-        return false;
-      }
-      return l.dataReferencia.isAfter(
-        dataLimite.subtract(const Duration(days: 1)),
-      );
-    }).toList();
+    if (_filtroSelecionado == 'ANO' && dataRef.year != dataBase.year) {
+      return false;
+    }
+    return dataRef.isAfter(dataLimite.subtract(const Duration(days: 1)));
   }
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder(
       valueListenable: Hive.box<LancamentoMensal>('lancamentos').listenable(),
-      builder: (context, Box<LancamentoMensal> box, _) {
-        final todosLancs = box.values.toList();
-        final lancamentosFiltrados = _filtrarLancamentos(todosLancs);
+      builder: (context, Box<LancamentoMensal> boxLancamentos, _) {
+        final todosLancs = boxLancamentos.values
+            .where((l) => !l.isDeletado)
+            .toList();
 
         if (todosLancs.isEmpty) {
           return RefreshIndicator(
@@ -103,83 +103,97 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
           );
         }
 
+        // Descobre qual a fatura mais recente lançada para alinhar o filtro
+        DateTime dataBaseFiltro = DateTime.now();
+        if (todosLancs.isNotEmpty) {
+          dataBaseFiltro = todosLancs
+              .map((l) => l.dataReferencia)
+              .reduce((a, b) => a.isAfter(b) ? a : b);
+        }
+
         final boxUsinas = Hive.box<Usina>('usinas');
+        final usinas = boxUsinas.values.where((u) => !u.isDeletado).toList();
 
         double totalGeralGerado = 0;
         double totalGeralConsumido = 0;
         Map<String, double> consumoPorUsina = {};
         Map<String, Map<String, dynamic>> dadosMensais = {};
 
-        for (var l in lancamentosFiltrados) {
-          Usina? u;
-          try {
-            u = boxUsinas.values.firstWhere(
-              (us) => us.id == l.usinaId && !us.isDeletado,
+        // Processa usina por usina para não quebrar a ordem cronológica
+        for (var usina in usinas) {
+          final lancsDaUsina = todosLancs
+              .where((l) => l.usinaId == usina.id)
+              .toList();
+          lancsDaUsina.sort(
+            (a, b) => a.dataReferencia.compareTo(b.dataReferencia),
+          );
+
+          for (var l in lancsDaUsina) {
+            // Roda o cálculo para manter o histórico de saldo alimentado
+            final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
+              usina,
+              l,
             );
-          } catch (_) {}
 
-          if (u != null) {
-            String key = DateFormat('yyyyMM').format(l.dataReferencia);
-            String display = DateFormat(
-              'MMM',
-              'pt_BR',
-            ).format(l.dataReferencia).toUpperCase();
-
-            if (l.dataReferencia.year != DateTime.now().year) {
-              display = DateFormat(
-                'MMM/yy',
+            // Mas só desenha os dados se o mês passar no Filtro
+            if (_isDentroDoFiltro(l.dataReferencia, dataBaseFiltro)) {
+              String key = DateFormat('yyyyMM').format(l.dataReferencia);
+              String display = DateFormat(
+                'MMM',
                 'pt_BR',
               ).format(l.dataReferencia).toUpperCase();
-            }
 
-            dadosMensais.putIfAbsent(
-              key,
-              () => {
-                'mes': display,
-                'geracao': 0.0,
-                'consumo': 0.0,
-                'custo': 0.0,
-                'custoProjetado': 0.0,
-                'date': l.dataReferencia,
-              },
-            );
+              if (l.dataReferencia.year != DateTime.now().year) {
+                display = DateFormat(
+                  'MMM/yy',
+                  'pt_BR',
+                ).format(l.dataReferencia).toUpperCase();
+              }
 
-            // =================================================================
-            // A MÁGICA GLOBAL: Pede para a calculadora o resumo da usina no mês
-            // =================================================================
-            final resumo = CalculadoraEnergetica.gerarResumoMesOficial(u, l);
-
-            double energiaEfetivamentePoupada = 0;
-
-            if (u.isGeradora) {
-              totalGeralGerado += resumo.geracaoTotal;
-              dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
-
-              double energiaCompensada = l.energiaInjetadaKwh.clamp(
-                0.0,
-                l.energiaConsumidaRedeKwh,
+              dadosMensais.putIfAbsent(
+                key,
+                () => {
+                  'mes': display,
+                  'geracao': 0.0,
+                  'consumo': 0.0,
+                  'custo': 0.0,
+                  'custoProjetado': 0.0,
+                  'date': l.dataReferencia,
+                },
               );
-              energiaEfetivamentePoupada =
-                  resumo.autoconsumo + energiaCompensada;
-            } else {
-              double energiaCompensada = resumo.injetadoOuRecebido.clamp(
-                0.0,
-                l.energiaConsumidaRedeKwh,
-              );
-              energiaEfetivamentePoupada = energiaCompensada;
+
+              double energiaEfetivamentePoupada = 0;
+
+              if (usina.isGeradora) {
+                totalGeralGerado += resumo.geracaoTotal;
+                dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
+
+                double energiaCompensada = l.energiaInjetadaKwh.clamp(
+                  0.0,
+                  l.energiaConsumidaRedeKwh,
+                );
+                energiaEfetivamentePoupada =
+                    resumo.autoconsumo + energiaCompensada;
+              } else {
+                double energiaCompensada = resumo.injetadoOuRecebido.clamp(
+                  0.0,
+                  l.energiaConsumidaRedeKwh,
+                );
+                energiaEfetivamentePoupada = energiaCompensada;
+              }
+
+              double economiaFinanceira =
+                  energiaEfetivamentePoupada * l.tarifaKwh;
+              double custoProjetado = l.valorFaturaR + economiaFinanceira;
+
+              totalGeralConsumido += resumo.consumoRealLocal;
+              dadosMensais[key]!['consumo'] += resumo.consumoRealLocal;
+              dadosMensais[key]!['custo'] += l.valorFaturaR;
+              dadosMensais[key]!['custoProjetado'] += custoProjetado;
+
+              consumoPorUsina[usina.nome] =
+                  (consumoPorUsina[usina.nome] ?? 0) + resumo.consumoRealLocal;
             }
-
-            double economiaFinanceira =
-                energiaEfetivamentePoupada * l.tarifaKwh;
-            double custoProjetado = l.valorFaturaR + economiaFinanceira;
-
-            totalGeralConsumido += resumo.consumoRealLocal;
-            dadosMensais[key]!['consumo'] += resumo.consumoRealLocal;
-            dadosMensais[key]!['custo'] += l.valorFaturaR;
-            dadosMensais[key]!['custoProjetado'] += custoProjetado;
-
-            consumoPorUsina[u.nome] =
-                (consumoPorUsina[u.nome] ?? 0) + resumo.consumoRealLocal;
           }
         }
 
@@ -296,7 +310,14 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
                           Expanded(
                             flex: 1,
                             child: _buildTopViloesCard(
-                              lancamentosFiltrados,
+                              todosLancs
+                                  .where(
+                                    (l) => _isDentroDoFiltro(
+                                      l.dataReferencia,
+                                      dataBaseFiltro,
+                                    ),
+                                  )
+                                  .toList(),
                               boxUsinas,
                             ),
                           ),
@@ -316,7 +337,17 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
                       const SizedBox(height: 16),
                       _buildFinanceiroCard(graficoOrdenado),
                       const SizedBox(height: 16),
-                      _buildTopViloesCard(lancamentosFiltrados, boxUsinas),
+                      _buildTopViloesCard(
+                        todosLancs
+                            .where(
+                              (l) => _isDentroDoFiltro(
+                                l.dataReferencia,
+                                dataBaseFiltro,
+                              ),
+                            )
+                            .toList(),
+                        boxUsinas,
+                      ),
                     ],
                     const SizedBox(height: 80),
                   ],
@@ -332,6 +363,8 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
   Widget _buildFiltrosRow() {
     return Row(
       children: [
+        _buildFilterChip('Tudo', 'TUDO'),
+        const SizedBox(width: 8),
         _buildFilterChip('6 Meses', '6M'),
         const SizedBox(width: 8),
         _buildFilterChip('12 Meses', '12M'),
@@ -525,16 +558,16 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 4. Gráfico de Linha (Geração Única)
+  // 4. Gráfico de ONDA (Evolução da Geração)
   Widget _buildGeracaoLinhaCard(List<Map<String, dynamic>> dados) {
     return _buildBaseCard(
-      titulo: "Evolução da Geração",
-      icone: Icons.show_chart,
+      titulo: "Evolução da Produção",
+      icone: Icons.waves,
       child: Column(
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
-            children: [_buildLegendItem("Produção Solar", Colors.orange)],
+            children: [_buildLegendItem("Produção Solar", Colors.orangeAccent)],
           ),
           const SizedBox(height: 16),
           if (dados.isEmpty)
@@ -552,7 +585,7 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
               height: 240,
               width: double.infinity,
               child: CustomPaint(
-                painter: _SingleLineChartPainter(dados, Colors.orange),
+                painter: _WaveChartPainter(dados, Colors.orangeAccent),
               ),
             ),
         ],
@@ -570,7 +603,8 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildLegendItem("Sem Solar (Projetado)", Colors.grey.shade300),
+              // AQUI: A cor da legenda alterada para um azul suave que contrasta com o verde
+              _buildLegendItem("Sem Solar (Projetado)", Colors.blue.shade300),
               const SizedBox(width: 16),
               _buildLegendItem("Com Solar (Real)", Colors.green),
             ],
@@ -619,7 +653,7 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 6. Top Vilões
+  // 6. Top Vilões (Design Mais Clean)
   Widget _buildTopViloesCard(
     List<LancamentoMensal> lancamentos,
     Box<Usina> boxUsinas,
@@ -629,9 +663,14 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     List<LancamentoMensal> ordenados = List.from(lancamentos);
     if (ordenados.isEmpty) {
       return _buildBaseCard(
-        titulo: "Maiores Faturas",
+        titulo: "Vilões do Mês",
         icone: Icons.warning_amber_rounded,
-        child: const Center(child: Text("Sem dados")),
+        child: const Center(
+          child: Text(
+            "Sem faturas no período.",
+            style: TextStyle(color: Colors.grey),
+          ),
+        ),
       );
     }
 
@@ -649,8 +688,8 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
 
     return _buildBaseCard(
       titulo:
-          "Vilões do Mês (${DateFormat('MMM', 'pt_BR').format(ultimaData).toUpperCase()})",
-      icone: Icons.warning_amber_rounded,
+          "Maiores Faturas (${DateFormat('MMM', 'pt_BR').format(ultimaData).toUpperCase()})",
+      icone: Icons.monetization_on_outlined,
       child: Column(
         children: doMes.take(3).toList().asMap().entries.map((entry) {
           int rank = entry.key + 1;
@@ -666,35 +705,55 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
               ? Colors.red
               : (rank == 2 ? Colors.orange : Colors.amber);
 
-          return Card(
-            elevation: 0,
+          return Container(
             margin: const EdgeInsets.only(bottom: 8),
-            shape: RoundedRectangleBorder(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
               borderRadius: BorderRadius.circular(12),
-              side: BorderSide(color: Colors.grey.shade200),
+              border: Border.all(color: Colors.grey.shade100),
             ),
-            child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: corRank.withValues(alpha: 0.1),
-                child: Text(
-                  '#$rank',
-                  style: TextStyle(color: corRank, fontWeight: FontWeight.bold),
+            child: Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: corRank.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Center(
+                    child: Text(
+                      '#$rank',
+                      style: TextStyle(
+                        color: corRank,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-              title: Text(
-                nomeUsina,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    nomeUsina,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: Colors.black87,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              ),
-              trailing: Text(
-                moeda.format(l.valorFaturaR),
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.redAccent,
+                Text(
+                  moeda.format(l.valorFaturaR),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red.shade700,
+                    fontSize: 14,
+                  ),
                 ),
-              ),
+              ],
             ),
           );
         }).toList(),
@@ -712,12 +771,12 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.grey.shade100, width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 10,
+            blurRadius: 8,
             offset: const Offset(0, 4),
           ),
         ],
@@ -754,13 +813,13 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
           height: 10,
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
-        const SizedBox(width: 4),
+        const SizedBox(width: 6),
         Text(
           label,
           style: const TextStyle(
             fontSize: 11,
             color: Colors.grey,
-            fontWeight: FontWeight.bold,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ],
@@ -790,7 +849,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     return Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        // Se a economia for real, mostra o projetado em cima
         if (vFundo > (vFrente + 1.0))
           FittedBox(
             fit: BoxFit.scaleDown,
@@ -798,7 +856,8 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
               NumberFormat.compact().format(vFundo),
               style: TextStyle(
                 fontSize: 8,
-                color: Colors.grey.shade400,
+                // AQUI: Cor do texto "Projetado" alterada para azul
+                color: Colors.blue.shade400,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -825,7 +884,8 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
                 width: 18,
                 height: hFundo,
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade200,
+                  // AQUI: A cor da barra alterada para um azul claro e suave
+                  color: Colors.blue.shade100,
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
@@ -854,7 +914,10 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
   }
 }
 
-// Pintor Customizado para o Gráfico de DUAS Linhas (Balanço Energético)
+// ===========================================================================
+// PAINTERS DOS GRÁFICOS (DUPLA LINHA E ONDA)
+// ===========================================================================
+
 class _DoubleLineChartPainter extends CustomPainter {
   final List<Map<String, dynamic>> dados;
   final Color colorGeracao;
@@ -888,6 +951,8 @@ class _DoubleLineChartPainter extends CustomPainter {
 
     for (int i = 0; i < dados.length; i++) {
       double x = marginX + (i * stepX);
+      if (dados.length == 1) x = size.width / 2;
+
       double dyG =
           paddingTop +
           chartHeight -
@@ -996,23 +1061,30 @@ class _DoubleLineChartPainter extends CustomPainter {
     final path = Path();
     final fillPath = Path();
 
-    for (int i = 0; i < points.length; i++) {
-      if (i == 0) {
-        path.moveTo(points[i].dx, points[i].dy);
-        fillPath.moveTo(points[i].dx, chartBottomY);
-        fillPath.lineTo(points[i].dx, points[i].dy);
-      } else {
-        path.lineTo(points[i].dx, points[i].dy);
-        fillPath.lineTo(points[i].dx, points[i].dy);
+    if (points.length == 1) {
+      path.moveTo(20, points[0].dy);
+      path.lineTo(size.width - 20, points[0].dy);
+    } else {
+      path.moveTo(points[0].dx, points[0].dy);
+      fillPath.moveTo(points[0].dx, chartBottomY);
+      fillPath.lineTo(points[0].dx, points[0].dy);
+
+      for (int i = 0; i < points.length; i++) {
+        if (i == 0) {
+          path.moveTo(points[i].dx, points[i].dy);
+        } else {
+          path.lineTo(points[i].dx, points[i].dy);
+          fillPath.lineTo(points[i].dx, points[i].dy);
+        }
       }
+      fillPath.lineTo(points.last.dx, chartBottomY);
+      fillPath.close();
     }
-    fillPath.lineTo(points.last.dx, chartBottomY);
-    fillPath.close();
 
     final gradient = LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
-      colors: [color.withValues(alpha: 0.15), color.withValues(alpha: 0.0)],
+      colors: [color.withValues(alpha: 0.1), color.withValues(alpha: 0.0)],
     );
     final paintFill = Paint()
       ..shader = gradient.createShader(
@@ -1032,12 +1104,12 @@ class _DoubleLineChartPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-// Pintor Customizado para o Gráfico de UMA Linha (Evolução da Geração)
-class _SingleLineChartPainter extends CustomPainter {
+// NOVO: Painter em ONDA (Curvas Suaves)
+class _WaveChartPainter extends CustomPainter {
   final List<Map<String, dynamic>> dados;
   final Color cor;
 
-  _SingleLineChartPainter(this.dados, this.cor);
+  _WaveChartPainter(this.dados, this.cor);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1049,24 +1121,8 @@ class _SingleLineChartPainter extends CustomPainter {
     }
     if (maxVal == 0) maxVal = 1;
 
-    final paintLine = Paint()
-      ..color = cor
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    final paintDot = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    final paintDotBorder = Paint()
-      ..color = cor
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
-    final fillPath = Path();
-
-    double paddingTop = 25.0;
-    double paddingBottom = 25.0;
+    double paddingTop = 30.0;
+    double paddingBottom = 30.0;
     double chartHeight = size.height - paddingTop - paddingBottom;
     double chartBottomY = size.height - paddingBottom;
 
@@ -1079,74 +1135,113 @@ class _SingleLineChartPainter extends CustomPainter {
 
     for (int i = 0; i < dados.length; i++) {
       double x = marginX + (i * stepX);
+      if (dados.length == 1) x = size.width / 2;
+
       double dy =
           paddingTop +
           chartHeight -
           ((dados[i]['geracao'] / maxVal) * chartHeight);
       points.add(Offset(x, dy));
-
-      if (i == 0) {
-        path.moveTo(x, dy);
-        fillPath.moveTo(x, chartBottomY);
-        fillPath.lineTo(x, dy);
-      } else {
-        path.lineTo(x, dy);
-        fillPath.lineTo(x, dy);
-      }
     }
 
-    if (points.isNotEmpty) {
-      fillPath.lineTo(points.last.dx, chartBottomY);
-      fillPath.close();
+    final path = Path();
+    final fillPath = Path();
 
-      final gradient = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [cor.withValues(alpha: 0.3), cor.withValues(alpha: 0.0)],
+    if (points.length == 1) {
+      path.moveTo(marginX, points[0].dy);
+      path.lineTo(size.width - marginX, points[0].dy);
+
+      fillPath.moveTo(marginX, chartBottomY);
+      fillPath.lineTo(marginX, points[0].dy);
+      fillPath.lineTo(size.width - marginX, points[0].dy);
+      fillPath.lineTo(size.width - marginX, chartBottomY);
+    } else {
+      path.moveTo(points[0].dx, points[0].dy);
+      fillPath.moveTo(points[0].dx, chartBottomY);
+      fillPath.lineTo(points[0].dx, points[0].dy);
+
+      for (int i = 0; i < points.length - 1; i++) {
+        final p0 = points[i];
+        final p1 = points[i + 1];
+
+        final controlPointX = p0.dx + (p1.dx - p0.dx) / 2;
+
+        path.cubicTo(controlPointX, p0.dy, controlPointX, p1.dy, p1.dx, p1.dy);
+
+        fillPath.cubicTo(
+          controlPointX,
+          p0.dy,
+          controlPointX,
+          p1.dy,
+          p1.dx,
+          p1.dy,
+        );
+      }
+      fillPath.lineTo(points.last.dx, chartBottomY);
+    }
+    fillPath.close();
+
+    final gradient = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [cor.withValues(alpha: 0.3), cor.withValues(alpha: 0.0)],
+    );
+
+    final paintFill = Paint()
+      ..shader = gradient.createShader(
+        Rect.fromLTWH(0, paddingTop, size.width, chartHeight),
       );
 
-      final paintFill = Paint()
-        ..shader = gradient.createShader(
-          Rect.fromLTWH(0, paddingTop, size.width, chartHeight),
-        );
+    final paintLine = Paint()
+      ..color = cor
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
 
-      canvas.drawPath(fillPath, paintFill);
-      canvas.drawPath(path, paintLine);
+    canvas.drawPath(fillPath, paintFill);
+    canvas.drawPath(path, paintLine);
 
-      final textPainter = TextPainter(textDirection: TextDirection.ltr);
-      for (int i = 0; i < points.length; i++) {
-        canvas.drawCircle(points[i], 4, paintDot);
-        canvas.drawCircle(points[i], 4, paintDotBorder);
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    final paintDot = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.fill;
+    final paintDotBorder = Paint()
+      ..color = cor
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
 
+    for (int i = 0; i < points.length; i++) {
+      canvas.drawCircle(points[i], 4, paintDot);
+      canvas.drawCircle(points[i], 4, paintDotBorder);
+
+      textPainter.text = TextSpan(
+        text: dados[i]['mes'],
+        style: const TextStyle(
+          fontSize: 9,
+          color: Colors.black54,
+          fontWeight: FontWeight.bold,
+        ),
+      );
+      textPainter.layout();
+      textPainter.paint(
+        canvas,
+        Offset(points[i].dx - (textPainter.width / 2), chartBottomY + 8),
+      );
+
+      if (dados[i]['geracao'] > 0) {
         textPainter.text = TextSpan(
-          text: dados[i]['mes'],
-          style: const TextStyle(
+          text: NumberFormat.compact().format(dados[i]['geracao']),
+          style: TextStyle(
             fontSize: 9,
-            color: Colors.black54,
+            color: cor,
             fontWeight: FontWeight.bold,
           ),
         );
         textPainter.layout();
         textPainter.paint(
           canvas,
-          Offset(points[i].dx - (textPainter.width / 2), chartBottomY + 8),
+          Offset(points[i].dx - (textPainter.width / 2), points[i].dy - 16),
         );
-
-        if (dados[i]['geracao'] > 0) {
-          textPainter.text = TextSpan(
-            text: NumberFormat.compact().format(dados[i]['geracao']),
-            style: TextStyle(
-              fontSize: 9,
-              color: cor,
-              fontWeight: FontWeight.bold,
-            ),
-          );
-          textPainter.layout();
-          textPainter.paint(
-            canvas,
-            Offset(points[i].dx - (textPainter.width / 2), points[i].dy - 16),
-          );
-        }
       }
     }
   }

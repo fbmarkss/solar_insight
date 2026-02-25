@@ -227,10 +227,16 @@ class _AuditoriaListaTab extends StatelessWidget {
                 );
 
                 return Card(
-                  elevation: 2,
+                  elevation: 3, // 1. Tira a sombra pesada
+                  color: Colors.white, // 2. Força o fundo branco
+                  surfaceTintColor: Colors
+                      .transparent, // 3. Desliga o tom rosado do Material 3
                   margin: const EdgeInsets.only(bottom: 12),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(
+                      color: Colors.grey.shade200,
+                    ), // 4. Adiciona borda moderna
                   ),
                   child: ListTile(
                     contentPadding: const EdgeInsets.symmetric(
@@ -302,7 +308,7 @@ class _AuditoriaListaTab extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: const Color.fromARGB(78, 56, 161, 247)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.02),
@@ -313,6 +319,7 @@ class _AuditoriaListaTab extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
+        surfaceTintColor: Colors.transparent, // <-- Adicione esta linha
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),

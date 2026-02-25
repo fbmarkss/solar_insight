@@ -1547,7 +1547,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
-                  color: Colors.grey,
+                  color: Color.fromARGB(255, 1, 79, 248),
                 ),
               ),
             ],

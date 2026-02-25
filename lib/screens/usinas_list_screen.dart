@@ -1,16 +1,19 @@
 // Caminho: lib/screens/usinas_list_screen.dart
-// Descrição: Lista de Usinas com Navegador Aninhado, Pull-to-Refresh e Limites do Plano Freemium com bloqueio para Funcionários.
+// Descrição: Lista de Usinas com Navegador Aninhado, Pull-to-Refresh, Limites de Plano e Design Aprimorado com Métricas.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import '../models/usina.dart';
+import '../models/lancamento.dart';
 import 'cadastro_usina_screen.dart';
 import 'usina_detalhes_screen.dart';
 import 'paywall_screen.dart';
 import '../services/sincronizacao_service.dart';
 import '../services/subscription_provider.dart';
 import '../utils/app_feedback.dart';
+import '../utils/calculadora_energetica.dart';
 
 class UsinasListScreen extends StatefulWidget {
   const UsinasListScreen({super.key});
@@ -20,15 +23,17 @@ class UsinasListScreen extends StatefulWidget {
 }
 
 class _UsinasListScreenState extends State<UsinasListScreen> {
-  // A "mágica" para a Web: Um navegador independente que não esconde o Menu Lateral
   final GlobalKey<NavigatorState> _nestedNavKey = GlobalKey<NavigatorState>();
+  final NumberFormat _moedaFormat = NumberFormat.currency(
+    locale: 'pt_BR',
+    symbol: 'R\$',
+  );
+  final NumberFormat _numeroFormat = NumberFormat.decimalPattern('pt_BR');
 
-  // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
   Future<void> _handleRefresh(BuildContext context) async {
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
 
-      // Força o guardião a verificar se o plano mudou no servidor
       if (context.mounted) {
         Provider.of<SubscriptionProvider>(
           context,
@@ -58,16 +63,13 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
     }
   }
 
-  // --- LÓGICA DE NAVEGAÇÃO E VERIFICAÇÃO DE LIMITE (COM REGRA DE CARGO) ---
   void _tentarCriarNovaUsina(bool isWeb, BuildContext localContext) {
-    // 1. Instancia o Guardião e o Banco de Usinas
     final subProvider = Provider.of<SubscriptionProvider>(
       localContext,
       listen: false,
     );
     final box = Hive.box<Usina>('usinas');
 
-    // 2. Conta quantas Geradoras e Beneficiárias o usuário já possui
     final totalGeradorasAtuais = box.values
         .where((u) => u.isGeradora && !u.isDeletado)
         .length;
@@ -75,12 +77,9 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
         .where((u) => !u.isGeradora && !u.isDeletado)
         .length;
 
-    // 3. Verifica se ele está BLOQUEADO TOTALMENTE (Não pode geradora NEM beneficiária)
     if (!subProvider.podeAdicionarUsinaGeradora(totalGeradorasAtuais) &&
         !subProvider.podeAdicionarUsinaFilha(totalBeneficiariasAtuais)) {
-      // 4. VERIFICA SE É ADMIN OU FUNCIONÁRIO
       if (subProvider.isAdmin) {
-        // ABRE A VITRINE DE VENDAS SE FOR ADMIN
         _abrirTela(
           const PaywallScreen(
             mensagemMotivo:
@@ -90,7 +89,6 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
           localContext,
         );
       } else {
-        // MOSTRA AVISO SE FOR FUNCIONÁRIO
         AppFeedback.show(
           localContext,
           "🔒 Limite atingido. Solicite ao administrador da equipe que faça o upgrade para o plano PRO.",
@@ -100,13 +98,11 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
       return;
     }
 
-    // Se ele ainda puder adicionar algo, abre a tela de cadastro normal.
     _abrirTela(const CadastroUsinaScreen(), isWeb, localContext);
   }
 
   void _abrirTela(Widget tela, bool isWeb, BuildContext localContext) {
     if (isWeb) {
-      // Na Web: Abre a tela DENTRO da "gaiola" direita
       _nestedNavKey.currentState!.push(
         PageRouteBuilder(
           pageBuilder: (context, animation, secondaryAnimation) => tela,
@@ -116,18 +112,15 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
         ),
       );
     } else {
-      // No Telemóvel: Comportamento normal
       Navigator.push(localContext, MaterialPageRoute(builder: (_) => tela));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Usa a largura total do navegador para saber se é Web ou Mobile
     bool isWeb = MediaQuery.of(context).size.width >= 900;
 
     if (isWeb) {
-      // LAYOUT WEB: NAVEGADOR ANINHADO
       return Navigator(
         key: _nestedNavKey,
         onGenerateRoute: (settings) {
@@ -137,12 +130,10 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
         },
       );
     } else {
-      // LAYOUT MOBILE
       return _buildListaConteudo(isWeb);
     }
   }
 
-  // O Conteúdo principal que observa as mudanças no Banco de Dados
   Widget _buildListaConteudo(bool isWeb) {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
@@ -158,7 +149,6 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
           }
         },
       ),
-      // MÁGICA AQUI: Se for Web, o botão flutuante é "null" (desaparece). Se for mobile, ele aparece.
       floatingActionButton: isWeb
           ? null
           : FloatingActionButton.extended(
@@ -171,10 +161,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              onPressed: () => _tentarCriarNovaUsina(
-                isWeb,
-                context,
-              ), // <-- CHAMA A VALIDAÇÃO
+              onPressed: () => _tentarCriarNovaUsina(isWeb, context),
             ),
     );
   }
@@ -203,7 +190,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Meus Ativos',
+                        'Unidades e Ativos',
                         style: TextStyle(
                           fontSize: 28,
                           fontWeight: FontWeight.bold,
@@ -222,10 +209,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                   ),
                 ),
                 ElevatedButton.icon(
-                  onPressed: () => _tentarCriarNovaUsina(
-                    isWeb,
-                    context,
-                  ), // <-- CHAMA A VALIDAÇÃO
+                  onPressed: () => _tentarCriarNovaUsina(isWeb, context),
                   icon: const Icon(Icons.add),
                   label: const Text('Nova Unidade'),
                   style: ElevatedButton.styleFrom(
@@ -238,13 +222,20 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
+                    elevation: 0,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
             _buildWebSummaryRow(usinas),
-            const SizedBox(height: 32),
+
+            // --- A BARRA DIVISÓRIA ---
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Divider(color: Colors.grey.shade300, thickness: 1),
+            ),
+
             if (usinas.isEmpty)
               _buildEmptyState(isWeb, context)
             else
@@ -253,7 +244,8 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                 physics: const NeverScrollableScrollPhysics(),
                 gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: 450,
-                  childAspectRatio: 2.2,
+                  childAspectRatio:
+                      1.8, // Ajustado para acomodar mais dados no card
                   crossAxisSpacing: 24,
                   mainAxisSpacing: 24,
                 ),
@@ -303,7 +295,9 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
           if (usinas.isEmpty)
             _buildEmptyState(isWeb, context)
           else
-            ...usinas.map((usina) => _buildUsinaCard(context, usina, isWeb)),
+            ...usinas.map(
+              (usina) => _buildUsinaCardMobile(context, usina, isWeb),
+            ),
           const SizedBox(height: 80),
         ],
       ),
@@ -335,7 +329,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
           child: _buildSummaryPill(
             'Geradoras',
             '$geradoras',
-            Icons.wb_sunny_outlined,
+            Icons.wb_sunny_rounded,
             Colors.orange,
           ),
         ),
@@ -344,7 +338,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
           child: _buildSummaryPill(
             'Beneficiárias',
             '$beneficiarias',
-            Icons.home_work_outlined,
+            Icons.home_work_rounded,
             Colors.teal,
           ),
         ),
@@ -368,19 +362,26 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
     Color color,
   ) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 5,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
+              shape: BoxShape.circle,
             ),
             child: Icon(icon, color: color, size: 20),
           ),
@@ -392,13 +393,17 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                 Text(
                   value,
                   style: const TextStyle(
-                    fontSize: 20,
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 Text(
                   title,
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -411,14 +416,20 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
   }
 
   Widget _buildUsinaCardWeb(BuildContext context, Usina usina, bool isWeb) {
+    final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
+    final lancs = boxLanc.values
+        .where((l) => l.usinaId == usina.id && !l.isDeletado)
+        .toList();
+    final metricas = CalculadoraEnergetica.calcularMetricasGerais(usina, lancs);
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(color: const Color.fromARGB(120, 10, 160, 247)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
+            color: Colors.black.withValues(alpha: 0.03),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -438,8 +449,8 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                // Topo do Card (Ícone e Nome)
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
@@ -452,76 +463,84 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Icon(
-                        usina.isGeradora ? Icons.wb_sunny : Icons.home_work,
+                        usina.isGeradora
+                            ? Icons.wb_sunny_rounded
+                            : Icons.home_work_rounded,
                         color: usina.isGeradora ? Colors.orange : Colors.blue,
                         size: 24,
                       ),
                     ),
-                    if (!usina.ativa)
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.red.withValues(alpha: 0.1),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'Arquivada',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.red,
-                            fontWeight: FontWeight.bold,
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  usina.nome,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: Colors.blueGrey.shade900,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (!usina.ativa)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.red.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'Inativa',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.red,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                        ),
-                      ),
-                  ],
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      usina.nome,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                        color: Colors.blueGrey.shade900,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Text(
-                          'UC: ${usina.id}',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.blueGrey.shade400,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: Colors.grey.shade300),
-                          ),
-                          child: Text(
-                            usina.isGeradora ? 'Geradora' : 'Beneficiária',
+                          const SizedBox(height: 4),
+                          Text(
+                            'UC: ${usina.id}',
                             style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey.shade700,
-                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              color: Colors.blueGrey.shade400,
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Divisória sutil
+                Divider(color: Colors.grey.shade100, height: 24),
+
+                // Base do Card (Métricas Rápidas)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildMiniMetric(
+                      "Economia",
+                      _moedaFormat.format(metricas.valorTotalEconomizadoR),
+                      Colors.green.shade700,
+                    ),
+                    _buildMiniMetric(
+                      "Saldo",
+                      "${_numeroFormat.format(metricas.saldoCreditosEstimado)} kWh",
+                      Colors.blue.shade700,
                     ),
                   ],
                 ),
@@ -533,11 +552,20 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
     );
   }
 
-  Widget _buildUsinaCard(BuildContext context, Usina usina, bool isWeb) {
+  Widget _buildUsinaCardMobile(BuildContext context, Usina usina, bool isWeb) {
+    final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
+    final lancs = boxLanc.values
+        .where((l) => l.usinaId == usina.id && !l.isDeletado)
+        .toList();
+    final metricas = CalculadoraEnergetica.calcularMetricasGerais(usina, lancs);
+
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: const Color.fromARGB(64, 41, 157, 252)),
+      ),
       color: Colors.white,
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
@@ -545,85 +573,101 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
             _abrirTela(UsinaDetalhesScreen(usina: usina), isWeb, context),
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Row(
+          child: Column(
             children: [
-              Container(
-                width: 50,
-                height: 50,
-                decoration: BoxDecoration(
-                  color: usina.isGeradora
-                      ? Colors.orange.withValues(alpha: 0.1)
-                      : Colors.blue.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  usina.isGeradora ? Icons.wb_sunny : Icons.home_work,
-                  color: usina.isGeradora ? Colors.orange : Colors.blue,
-                  size: 28,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      usina.nome,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: Colors.black87,
-                      ),
+              Row(
+                children: [
+                  Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: usina.isGeradora
+                          ? Colors.orange.withValues(alpha: 0.1)
+                          : Colors.blue.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'UC: ${usina.id}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    child: Icon(
+                      usina.isGeradora
+                          ? Icons.wb_sunny_rounded
+                          : Icons.home_work_rounded,
+                      color: usina.isGeradora ? Colors.orange : Colors.blue,
+                      size: 28,
                     ),
-                    const SizedBox(height: 4),
-                    Row(
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
+                        Text(
+                          usina.nome,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Colors.black87,
                           ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: Colors.grey.shade300),
-                          ),
-                          child: Text(
-                            usina.isGeradora ? 'Geradora' : 'Beneficiária',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey.shade700,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        if (!usina.ativa) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              'Arquivada',
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Text(
+                              'UC: ${usina.id}',
                               style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.red,
-                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                                color: Colors.grey[600],
                               ),
                             ),
-                          ),
-                        ],
+                            const Spacer(),
+                            if (!usina.ativa)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'Inativa',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.red,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildMiniMetricMobile(
+                      "Economia",
+                      _moedaFormat.format(metricas.valorTotalEconomizadoR),
+                      Colors.green.shade700,
+                    ),
+                    _buildMiniMetricMobile(
+                      "Saldo",
+                      "${_numeroFormat.format(metricas.saldoCreditosEstimado)} kWh",
+                      Colors.blue.shade700,
                     ),
                   ],
                 ),
@@ -632,6 +676,50 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildMiniMetric(String label, String value, Color valueColor) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: Colors.grey.shade500,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: valueColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMiniMetricMobile(String label, String value, Color valueColor) {
+    return Row(
+      children: [
+        Text(
+          "$label: ",
+          style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: valueColor,
+          ),
+        ),
+      ],
     );
   }
 
@@ -655,10 +743,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
             const SizedBox(height: 8),
             if (!isWeb)
               ElevatedButton.icon(
-                onPressed: () => _tentarCriarNovaUsina(
-                  isWeb,
-                  context,
-                ), // <-- CHAMA A VALIDAÇÃO AQUI TAMBÉM
+                onPressed: () => _tentarCriarNovaUsina(isWeb, context),
                 icon: const Icon(Icons.add),
                 label: const Text('Nova Unidade'),
                 style: ElevatedButton.styleFrom(

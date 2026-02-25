@@ -615,7 +615,7 @@ class CalculadoraEnergetica {
         'tipo': 'fuga_dinheiro',
         'titulo': 'Fuga de Dinheiro (Multa)!',
         'mensagem':
-            'A unidade **${usina.nome}** pagou R\$ ${ultimo.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa (ERE/DRE). Peça a um eletricista para avaliar o Banco de Capacitores.',
+            'A unidade ${usina.nome} pagou R\$ ${ultimo.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa (ERE/DRE). Peça a um eletricista para avaliar o Banco de Capacitores.',
         'cor': 'red',
         'icone': 'bolt',
       });
@@ -627,7 +627,7 @@ class CalculadoraEnergetica {
     if (ultimo.valorFaturaR > 0 && (custosFixos / ultimo.valorFaturaR) > 0.6) {
       alertas.add({
         'tipo': 'custo_fixo_alto',
-        'titulo': 'Custos Fixos Elevados',
+        'titulo': 'Custos Fixos Elevados para ${usina.nome}',
         'mensagem':
             'Mais de 60% da sua fatura em ${usina.nome} é composta por Demanda ou Taxas. A energia solar não abate estes custos.',
         'cor': 'orange',
@@ -684,9 +684,9 @@ class CalculadoraEnergetica {
       if (saldoDoMesAnterior >= deficit) {
         alertas.add({
           'tipo': 'consumo_reserva',
-          'titulo': 'Consumindo Reserva',
+          'titulo': 'Consumindo Reserva em ${usina.nome}',
           'mensagem':
-              'A unidade **${usina.nome}** consumiu mais do que recebeu neste mês. O sistema utilizou ${deficit.toStringAsFixed(0)} kWh do seu Banco de Créditos para cobrir a diferença.',
+              'A unidade ${usina.nome} consumiu mais do que recebeu neste mês. O sistema utilizou ${deficit.toStringAsFixed(0)} kWh do seu Banco de Créditos para cobrir a diferença.',
           'cor': 'orange',
           'icone': 'hourglass_bottom',
         });
@@ -694,9 +694,9 @@ class CalculadoraEnergetica {
         double faltou = deficit - saldoDoMesAnterior;
         alertas.add({
           'tipo': 'deficit_parcial',
-          'titulo': 'Reserva Insuficiente',
+          'titulo': 'Reserva Insuficiente para ${usina.nome}',
           'mensagem':
-              'A unidade **${usina.nome}** precisou de ${deficit.toStringAsFixed(0)} kWh extras. A sua reserva só tinha ${saldoDoMesAnterior.toStringAsFixed(0)} kWh, então a diferença de ${faltou.toStringAsFixed(0)} kWh foi cobrada em Reais.',
+              'A unidade ${usina.nome} precisou de ${deficit.toStringAsFixed(0)} kWh extras. A sua reserva só tinha ${saldoDoMesAnterior.toStringAsFixed(0)} kWh, então a diferença de ${faltou.toStringAsFixed(0)} kWh foi cobrada em Reais.',
           'cor': 'red',
           'icone': 'monetization_on',
         });
@@ -705,7 +705,7 @@ class CalculadoraEnergetica {
           'tipo': 'deficit_real',
           'titulo': 'Fatura Descoberta (Pagamento Extra)',
           'mensagem':
-              'A unidade **${usina.nome}** precisou de ${deficit.toStringAsFixed(0)} kWh extras para abater o consumo. Como você NÃO tinha saldo, a diferença foi cobrada em Reais na fatura.',
+              'A unidade ${usina.nome} precisou de ${deficit.toStringAsFixed(0)} kWh extras para abater o consumo. Como você NÃO tinha saldo, a diferença foi cobrada em Reais na fatura.',
           'cor': 'red',
           'icone': 'monetization_on',
         });
@@ -730,13 +730,13 @@ class CalculadoraEnergetica {
               saldoMatematicoEsperado - saldoLidoNaFaturaAtual;
           alertas.add({
             'tipo': 'creditos_desviados',
-            'titulo': '🚨 ALERTA: Créditos não lançados!',
+            'titulo': 'Créditos não lançados para ${usina.nome}!',
             'mensagem':
-                'A concessionária deixou de creditar  ${creditosDesviados.toStringAsFixed(0)} kWh no seu banco de créditos!\n'
-                '• Saldo anterior: ${saldoAnterior.toStringAsFixed(0)} kWh.\n'
-                '• Crédito do mês: ${(saldoMensal > 0 ? "+" : "")}${saldoMensal.toStringAsFixed(0)} kWh.\n'
+                'A concessionária deixou de creditar  ${creditosDesviados.toStringAsFixed(0)} kWh no seu banco de créditos para a unidade ${usina.nome}.\n'
+                // '• Saldo anterior: ${saldoAnterior.toStringAsFixed(0)} kWh.\n'
+                // '• Crédito do mês: ${(saldoMensal > 0 ? "+" : "")}${saldoMensal.toStringAsFixed(0)} kWh.\n'
                 '• Saldo Total Esperado: ${saldoMatematicoEsperado.toStringAsFixed(0)} kWh.\n'
-                '• Saldo lido na Fatura: ${saldoLidoNaFaturaAtual.toStringAsFixed(0)} kWh.\n'
+                // '• Saldo lido na Fatura: ${saldoLidoNaFaturaAtual.toStringAsFixed(0)} kWh.\n'
                 'Verifique e conteste a sua fatura!',
             'cor': 'red',
             'icone': 'policy',
@@ -883,9 +883,9 @@ class CalculadoraEnergetica {
                   saldoDasMaes[mae.id]! > deficitDoMes) {
                 alertasGerais.add({
                   'tipo': 'otimizacao_rateio',
-                  'titulo': 'Oportunidade de Economia!',
+                  'titulo': 'Oportunidade de Economia ! ${filha.nome}',
                   'mensagem':
-                      'A unidade **${filha.nome}** pagou conta este mês, enquanto a usina **${mae.nome}** tem saldo sobrando.\nRecomendação: Aumente o % de rateio para a ${filha.nome}!',
+                      'A unidade ${filha.nome} pagou conta este mês, enquanto a usina ${mae.nome} tem saldo sobrando.\nRecomendação: Aumente o % de rateio para a ${filha.nome}!',
                   'cor': 'green',
                   'icone': 'lightbulb_circle',
                 });
