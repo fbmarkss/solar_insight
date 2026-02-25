@@ -1,5 +1,5 @@
 // Caminho: lib/screens/tabs/auditoria_global_tab.dart
-// Descrição: Aba de Análise Global com Custo Projetado corrigido via Cálculo Inverso de Energia Evitada.
+// Descrição: Aba de Análise Global com Custo Projetado corrigido via Fonte Única de Verdade (Calculadora).
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -8,6 +8,7 @@ import '../../models/usina.dart';
 import '../../models/lancamento.dart';
 import '../../services/sincronizacao_service.dart';
 import '../../utils/app_feedback.dart';
+import '../../utils/calculadora_energetica.dart';
 
 class AuditoriaGlobalTab extends StatefulWidget {
   const AuditoriaGlobalTab({super.key});
@@ -143,57 +144,42 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
               },
             );
 
-            double consumoReal = 0;
+            // =================================================================
+            // A MÁGICA GLOBAL: Pede para a calculadora o resumo da usina no mês
+            // =================================================================
+            final resumo = CalculadoraEnergetica.gerarResumoMesOficial(u, l);
+
             double energiaEfetivamentePoupada = 0;
 
             if (u.isGeradora) {
-              totalGeralGerado += l.geracaoTotalKwh;
-              dadosMensais[key]!['geracao'] += l.geracaoTotalKwh;
+              totalGeralGerado += resumo.geracaoTotal;
+              dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
 
-              // 1. AUTOCONSUMO: Gerado - Injetado (Limitado a zero para evitar valores negativos)
-              double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
-                  .clamp(0.0, double.infinity);
-
-              // 2. CONSUMO TOTAL DA INSTALAÇÃO: O que consumiu direto do painel + O que precisou puxar da rua
-              consumoReal = autoconsumo + l.energiaConsumidaRedeKwh;
-
-              // 3. ENERGIA COMPENSADA: A concessionária só desconta da fatura o limite do que você puxou da rede.
               double energiaCompensada = l.energiaInjetadaKwh.clamp(
                 0.0,
                 l.energiaConsumidaRedeKwh,
               );
-
-              // 4. ECONOMIA REAL DO MÊS: O que deixou de comprar da rua (Autoconsumo) + O que a rede descontou (Compensada)
-              energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
+              energiaEfetivamentePoupada =
+                  resumo.autoconsumo + energiaCompensada;
             } else {
-              // USINA BENEFICIÁRIA (Apenas recebe créditos)
-              consumoReal = l.energiaConsumidaRedeKwh;
-
-              // Para beneficiária, assumimos que 'energiaInjetadaKwh' armazena o crédito recebido.
-              // Ela também só pode abater até o limite do que consumiu.
-              double energiaCompensada = l.energiaInjetadaKwh.clamp(
+              double energiaCompensada = resumo.injetadoOuRecebido.clamp(
                 0.0,
                 l.energiaConsumidaRedeKwh,
               );
-
               energiaEfetivamentePoupada = energiaCompensada;
             }
 
-            // O NOVO CÁLCULO FINANCEIRO (Realista e Conservador)
-            // Economia = Apenas a energia que efetivamente evitou uma cobrança * Tarifa
             double economiaFinanceira =
                 energiaEfetivamentePoupada * l.tarifaKwh;
-
-            // Custo Projetado = O que eu paguei de fato (fatura) + O que eu teria pago a mais (economia)
             double custoProjetado = l.valorFaturaR + economiaFinanceira;
 
-            totalGeralConsumido += consumoReal;
-            dadosMensais[key]!['consumo'] += consumoReal;
+            totalGeralConsumido += resumo.consumoRealLocal;
+            dadosMensais[key]!['consumo'] += resumo.consumoRealLocal;
             dadosMensais[key]!['custo'] += l.valorFaturaR;
             dadosMensais[key]!['custoProjetado'] += custoProjetado;
 
             consumoPorUsina[u.nome] =
-                (consumoPorUsina[u.nome] ?? 0) + consumoReal;
+                (consumoPorUsina[u.nome] ?? 0) + resumo.consumoRealLocal;
           }
         }
 
@@ -650,7 +636,7 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     }
 
     ordenados.sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
-    DateTime ultimaData = ordenados.first.dataReferencia;
+    DateTime ultimaData = ordenados.last.dataReferencia;
 
     var doMes = ordenados
         .where(

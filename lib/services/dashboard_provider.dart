@@ -160,7 +160,7 @@ class DashboardProvider extends ChangeNotifier {
         tempInvestimentoROI += usina.totalInvestido;
         tempEconomiaROI += metricas.valorTotalEconomizadoR;
       } else {
-        // --- CORREÇÃO CIRÚRGICA 1: Ignora Beneficiárias no contador de erro do ROI ---
+        // Ignora Beneficiárias no contador de erro do ROI
         if (usina.isGeradora) {
           tempCountSemInvestimento++;
         }
@@ -170,7 +170,7 @@ class DashboardProvider extends ChangeNotifier {
       if (usina.isGeradora) {
         somaPotenciaNominal += usina.potenciaTotalPaineisKwp;
 
-        // --- CORREÇÃO CIRÚRGICA 2: Soma da Distribuição Real ---
+        // Soma da Distribuição Real
         if (usina.beneficiarias.isNotEmpty) {
           for (var lancamento in lancamentosUsina) {
             somaDistribuidaReal +=
@@ -225,17 +225,25 @@ class DashboardProvider extends ChangeNotifier {
         );
 
         if (lancamentoMes.usinaId.isNotEmpty) {
-          somaGeracaoMes += lancamentoMes.geracaoTotalKwh;
+          // =========================================================
+          // A MÁGICA ACONTECE AQUI: Chamamos a Fonte Única de Verdade
+          // =========================================================
+          final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
+            usina,
+            lancamentoMes,
+          );
 
-          if (usina.isGeradora) {
-            double autoconsumo =
-                (lancamentoMes.geracaoTotalKwh -
-                        lancamentoMes.energiaInjetadaKwh)
-                    .clamp(0, double.infinity);
-            somaConsumoMes +=
-                (autoconsumo + lancamentoMes.energiaConsumidaRedeKwh);
+          if (_usinaSelecionada == null) {
+            // Se for Visão Global: Soma a produção pura e o consumo total
+            somaGeracaoMes += resumo.geracaoTotal;
+            somaConsumoMes += resumo.consumoRealLocal;
           } else {
-            somaConsumoMes += lancamentoMes.energiaConsumidaRedeKwh;
+            // Se for Visão Individual (Aba específica da usina):
+            // Mostra a Geração se for mãe, ou o que Recebeu se for filha
+            somaGeracaoMes += usina.isGeradora
+                ? resumo.geracaoTotal
+                : resumo.injetadoOuRecebido;
+            somaConsumoMes += resumo.consumoRealLocal;
           }
 
           var novosAlertas = CalculadoraEnergetica.gerarAlertasDeGestao(
@@ -252,7 +260,7 @@ class DashboardProvider extends ChangeNotifier {
     totalGerado = somaGeracaoTotal;
     totalEconomizado = somaEconomiaTotal;
     saldoCreditosTotal = somaSaldo;
-    totalEnergiaDistribuida = somaDistribuidaReal; // Agora com o valor correto
+    totalEnergiaDistribuida = somaDistribuidaReal;
     potenciaInstaladaNominal = somaPotenciaNominal;
     totalUsinas = contUsinas;
     geracaoMensal = somaGeracaoMes;

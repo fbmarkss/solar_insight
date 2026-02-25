@@ -1,5 +1,5 @@
 // Caminho: lib/screens/usina_detalhes_screen.dart
-// Descrição: Dashboard de Performance da Usina (Com Auditoria Visível de Créditos).
+// Descrição: Dashboard de Performance da Usina (Com Auditoria Visível e Fonte Única de Verdade).
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -343,24 +343,17 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
             (sum, l) => sum + l.energiaConsumidaRedeKwh,
           );
 
-          // --- CORREÇÃO DO CÁLCULO DE RETENÇÃO (BLINDADO CONTRA USINAS ANTIGAS) ---
+          // ===================================================================
+          // A MÁGICA 1: CÁLCULO DE RETENÇÃO (USANDO A NOVA FONTE ÚNICA)
+          // ===================================================================
           double retidoConcessionaria = 0;
-          double taxaMinima = 100.0; // Trifásico padrão
-          if (widget.usina.tipo.toLowerCase().contains('monof')) {
-            taxaMinima = 30.0;
-          }
-          if (widget.usina.tipo.toLowerCase().contains('bif')) {
-            taxaMinima = 50.0;
-          }
-
           for (var l in lancamentos) {
-            if (l.energiaConsumidaRedeKwh < taxaMinima) {
-              retidoConcessionaria += l.energiaConsumidaRedeKwh;
-            } else {
-              retidoConcessionaria += taxaMinima;
-            }
+            final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
+              widget.usina,
+              l,
+            );
+            retidoConcessionaria += resumo.taxaMinimaRetida;
           }
-          // -----------------------------------------------------------------------
 
           Map<String, dynamic> saudeSistema = {};
           double producaoIdeal = 0;
@@ -388,47 +381,17 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               'pt_BR',
             ).format(ultimo.dataReferencia).toUpperCase();
 
-            if (widget.usina.isGeradora) {
-              ultimoMesProducaoOuRecebido = ultimo.geracaoTotalKwh;
-              double autoconsumo =
-                  ultimo.geracaoTotalKwh - ultimo.energiaInjetadaKwh;
-              if (autoconsumo < 0) autoconsumo = 0;
-              ultimoMesConsumoReal =
-                  autoconsumo + ultimo.energiaConsumidaRedeKwh;
-            } else {
-              ultimoMesConsumoReal = ultimo.energiaConsumidaRedeKwh;
-
-              if (ultimo.energiaInjetadaKwh > 0) {
-                ultimoMesProducaoOuRecebido = ultimo.energiaInjetadaKwh;
-              } else {
-                final boxUsinas = Hive.box<Usina>('usinas');
-                final maes = boxUsinas.values.where(
-                  (u) =>
-                      u.isGeradora &&
-                      !u.isDeletado &&
-                      u.beneficiarias.any(
-                        (b) => b.idUsinaFilha == widget.usina.id,
-                      ),
-                );
-
-                for (var mae in maes) {
-                  final vinculo = mae.beneficiarias.firstWhere(
-                    (b) => b.idUsinaFilha == widget.usina.id,
-                  );
-                  try {
-                    final lancMae = box.values.firstWhere(
-                      (l) =>
-                          l.usinaId == mae.id &&
-                          !l.isDeletado &&
-                          l.dataReferencia.year == ultimo.dataReferencia.year &&
-                          l.dataReferencia.month == ultimo.dataReferencia.month,
-                    );
-                    ultimoMesProducaoOuRecebido +=
-                        lancMae.energiaInjetadaKwh * (vinculo.percentual / 100);
-                  } catch (_) {}
-                }
-              }
-            }
+            // ===================================================================
+            // A MÁGICA 2: ÚLTIMO MÊS (USANDO A NOVA FONTE ÚNICA)
+            // ===================================================================
+            final resumoUltimo = CalculadoraEnergetica.gerarResumoMesOficial(
+              widget.usina,
+              ultimo,
+            );
+            ultimoMesProducaoOuRecebido = widget.usina.isGeradora
+                ? resumoUltimo.geracaoTotal
+                : resumoUltimo.injetadoOuRecebido;
+            ultimoMesConsumoReal = resumoUltimo.consumoRealLocal;
           }
 
           return ListView(
@@ -519,7 +482,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               _buildSaldoCreditosCard(metricas.saldoCreditosEstimado),
               const SizedBox(height: 12),
 
-              // --- A MÁGICA 1: O PLACAR DE PREJUÍZO ---
               if (metricas.totalCreditosDesviados > 0) ...[
                 _buildDesvioCreditosCard(metricas.totalCreditosDesviados),
                 const SizedBox(height: 12),
@@ -682,9 +644,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               if (lancamentosOrdenados.isEmpty)
                 _buildEmptyState()
               else ...[
-                // --- A MÁGICA 2: SELO DE ALERTA NO HISTÓRICO ---
                 ...ultimos6Lancamentos.map((lanc) {
-                  // Acha o mês anterior cronologicamente na lista completa (se existir)
                   LancamentoMensal? lancAnterior;
                   int anteriorIdx = lancamentosOrdenados.indexOf(lanc) + 1;
 
@@ -756,16 +716,18 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     LancamentoMensal lancamento,
     double desvio,
   ) {
-    double autoconsumo = 0;
+    // =======================================================================
+    // A MÁGICA 3: TELA DE DETALHE CEGA (A Calculadora Entrega Tudo Pronto)
+    // =======================================================================
+    final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
+      widget.usina,
+      lancamento,
+    );
 
     double totalCreditoTeorico = 0;
     List<Map<String, dynamic>> listaCreditosTeoricos = [];
 
-    if (widget.usina.isGeradora) {
-      autoconsumo = lancamento.geracaoTotalKwh - lancamento.energiaInjetadaKwh;
-      if (autoconsumo < 0) autoconsumo = 0;
-    }
-
+    // O detalhamento da mãe ainda precisa ser consultado para desenhar as linhas visuais
     if (widget.usina.isBeneficiaria) {
       final boxUsinas = Hive.box<Usina>('usinas');
       final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
@@ -777,9 +739,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       );
 
       for (var mae in maes) {
-        final vinculo = mae.beneficiarias.firstWhere(
-          (b) => b.idUsinaFilha == widget.usina.id,
-        );
         try {
           final lancMae = boxLanc.values.firstWhere(
             (l) =>
@@ -788,8 +747,14 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                 l.dataReferencia.year == lancamento.dataReferencia.year &&
                 l.dataReferencia.month == lancamento.dataReferencia.month,
           );
+
           double recebidoTeorico =
-              lancMae.energiaInjetadaKwh * (vinculo.percentual / 100);
+              CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                mae,
+                lancMae,
+                widget.usina.id,
+              );
+
           totalCreditoTeorico += recebidoTeorico;
           listaCreditosTeoricos.add({
             'nome': mae.nome,
@@ -801,64 +766,8 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       }
     }
 
-    double consumoTotalReal = 0;
-    double saldoFisico = 0;
-
+    // Apenas a variável visual para mostrar o que foi digitado na Fatura
     double creditoPratico = lancamento.energiaInjetadaKwh;
-
-    if (widget.usina.isGeradora) {
-      consumoTotalReal = autoconsumo + lancamento.energiaConsumidaRedeKwh;
-      saldoFisico =
-          lancamento.energiaInjetadaKwh - lancamento.energiaConsumidaRedeKwh;
-    } else {
-      consumoTotalReal = lancamento.energiaConsumidaRedeKwh;
-      saldoFisico = creditoPratico - lancamento.energiaConsumidaRedeKwh;
-    }
-
-    // =========================================================================
-    // A MÁGICA DO SALDO INTELIGENTE (ESTIMATIVA VS FATURA)
-    // =========================================================================
-    double saldoExibicao = lancamento.saldoInformadoNaFatura ?? 0.0;
-    bool isSaldoCalculado = false;
-
-    if (saldoExibicao == 0.0) {
-      final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
-      final historicoLocal = boxLanc.values
-          .where((l) => l.usinaId == widget.usina.id && !l.isDeletado)
-          .toList();
-      // Ordena do mais antigo para o mais novo
-      historicoLocal.sort(
-        (a, b) => a.dataReferencia.compareTo(b.dataReferencia),
-      );
-
-      int idx = historicoLocal.indexWhere((l) => l.id == lancamento.id);
-
-      if (idx > 0) {
-        // Pega o saldo da fatura do mês anterior
-        double saldoAnterior =
-            historicoLocal[idx - 1].saldoInformadoNaFatura ?? 0.0;
-
-        // Calcula a sobra real (descontando a taxa mínima da concessionária)
-        double taxaMin = 100.0;
-        if (widget.usina.tipo.toLowerCase().contains('monof')) taxaMin = 30.0;
-        if (widget.usina.tipo.toLowerCase().contains('bif')) taxaMin = 50.0;
-
-        double consumoAbativel = lancamento.energiaConsumidaRedeKwh > taxaMin
-            ? lancamento.energiaConsumidaRedeKwh - taxaMin
-            : 0.0;
-
-        double sobraDoMes = creditoPratico - consumoAbativel;
-
-        saldoExibicao = saldoAnterior + sobraDoMes;
-        if (saldoExibicao < 0) saldoExibicao = 0.0; // Saldo não fica negativo
-        isSaldoCalculado = true;
-      } else {
-        // Se for o primeiro mês cadastrado, pega só a sobra física
-        saldoExibicao = saldoFisico > 0 ? saldoFisico : 0.0;
-        isSaldoCalculado = true;
-      }
-    }
-    // =========================================================================
 
     showModalBottomSheet(
       context: context,
@@ -935,12 +844,12 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         ),
                         _buildDetailRow(
                           'Geração Total',
-                          '${_numero.format(lancamento.geracaoTotalKwh)} kWh',
+                          '${_numero.format(resumo.geracaoTotal)} kWh',
                           boldValue: true,
                         ),
                         _buildDetailRow(
                           'Autoconsumo',
-                          '${_numero.format(autoconsumo)} kWh',
+                          '${_numero.format(resumo.autoconsumo)} kWh',
                           colorValue: Colors.purple,
                         ),
                         if (lancamento.leituraInversor != null &&
@@ -987,26 +896,55 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         const SizedBox(height: 12),
                         if (widget.usina.beneficiarias.isNotEmpty)
                           ...widget.usina.beneficiarias.map((b) {
-                            double qtdEnviada = 0.0;
-                            final boxLanc = Hive.box<LancamentoMensal>(
-                              'lancamentos',
-                            );
-                            try {
-                              final lancFilha = boxLanc.values.firstWhere(
-                                (l) =>
-                                    l.usinaId == b.idUsinaFilha &&
-                                    !l.isDeletado &&
-                                    l.dataReferencia.year ==
-                                        lancamento.dataReferencia.year &&
-                                    l.dataReferencia.month ==
-                                        lancamento.dataReferencia.month,
-                              );
-                              qtdEnviada = lancFilha.energiaInjetadaKwh;
-                            } catch (_) {}
+                            double enviadoParaEsta =
+                                CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                                  widget.usina,
+                                  lancamento,
+                                  b.idUsinaFilha,
+                                );
 
-                            return _buildDetailRow(
-                              '--> ${b.nome} (${b.percentual.toStringAsFixed(0)}%)',
-                              '${_numero.format(qtdEnviada)} kWh',
+                            if (enviadoParaEsta == 0 && b.percentual > 0) {
+                              return const SizedBox.shrink();
+                            }
+
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.arrow_forward_rounded,
+                                          size: 14,
+                                          color: Colors.green.shade600,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: Text(
+                                            '${b.nome} (${b.percentual.toStringAsFixed(0)}%)',
+                                            style: TextStyle(
+                                              color: Colors.grey.shade800,
+                                              fontSize: 13,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Text(
+                                    '${_numero.format(enviadoParaEsta)} kWh',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                      color: Colors.green,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             );
                           }),
                       ] else ...[
@@ -1027,7 +965,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                     style: TextStyle(color: Colors.black87),
                                   ),
                                   Text(
-                                    '${_numero.format(consumoTotalReal)} kWh',
+                                    '${_numero.format(resumo.consumoRealLocal)} kWh',
                                     style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 15,
@@ -1132,14 +1070,14 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                       if (widget.usina.isGeradora)
                         _buildDetailRow(
                           'Consumo Total do Local',
-                          '${_numero.format(consumoTotalReal)} kWh',
+                          '${_numero.format(resumo.consumoRealLocal)} kWh',
                           boldValue: true,
                         ),
                       _buildDetailRow(
                         widget.usina.isBeneficiaria
                             ? 'Gasto da Concessionária'
                             : 'Da Concessionária (Rede)',
-                        '${_numero.format(lancamento.energiaConsumidaRedeKwh)} kWh',
+                        '${_numero.format(resumo.consumidoDaRede)} kWh',
                         colorValue: Colors.red,
                       ),
                       if (lancamento.custoDemandaR > 0) ...[
@@ -1196,12 +1134,12 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: saldoFisico >= 0
+                          color: resumo.sobraFisicaDoMes >= 0
                               ? Colors.green.shade50
                               : Colors.red.shade50,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: saldoFisico >= 0
+                            color: resumo.sobraFisicaDoMes >= 0
                                 ? Colors.green.shade200
                                 : Colors.red.shade200,
                           ),
@@ -1212,20 +1150,20 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  saldoFisico >= 0
+                                  resumo.sobraFisicaDoMes >= 0
                                       ? 'Saldo do Mês (Sobrou)'
                                       : 'Déficit (Faltou)',
                                   style: TextStyle(
-                                    color: saldoFisico >= 0
+                                    color: resumo.sobraFisicaDoMes >= 0
                                         ? Colors.green.shade800
                                         : Colors.red.shade800,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
                                 Text(
-                                  '${saldoFisico >= 0 ? "+" : ""}${_numero.format(saldoFisico)} kWh',
+                                  '${resumo.sobraFisicaDoMes >= 0 ? "+" : ""}${_numero.format(resumo.sobraFisicaDoMes)} kWh',
                                   style: TextStyle(
-                                    color: saldoFisico >= 0
+                                    color: resumo.sobraFisicaDoMes >= 0
                                         ? Colors.green.shade800
                                         : Colors.red.shade800,
                                     fontWeight: FontWeight.bold,
@@ -1234,12 +1172,11 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                 ),
                               ],
                             ),
-                            if (saldoFisico < 0)
+                            if (resumo.sobraFisicaDoMes < 0)
                               Padding(
                                 padding: const EdgeInsets.only(top: 6),
                                 child: Text(
-                                  // --- AQUI ENTRA A MENSAGEM DINÂMICA ---
-                                  saldoExibicao > 0
+                                  resumo.saldoAcumuladoExibicao > 0
                                       ? "Atenção: O consumo superou os créditos recebidos. Este déficit foi abatido do seu saldo acumulado anterior."
                                       : "Atenção: O consumo superou os créditos recebidos. Como não havia saldo acumulado suficiente, a diferença foi cobrada na fatura.",
                                   style: TextStyle(
@@ -1250,11 +1187,9 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                   textAlign: TextAlign.center,
                                 ),
                               ),
-
-                            // --- CÓDIGO INSERIDO COM VARIÁVEIS INTELIGENTES ---
                             const SizedBox(height: 12),
                             Divider(
-                              color: saldoFisico >= 0
+                              color: resumo.sobraFisicaDoMes >= 0
                                   ? Colors.green.shade200
                                   : Colors.red.shade200,
                             ),
@@ -1263,21 +1198,21 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(
-                                  isSaldoCalculado
+                                  resumo.isSaldoEstimado
                                       ? 'Saldo Acumulado (Estimado)'
                                       : 'Saldo Acumulado (Fatura)',
                                   style: TextStyle(
                                     color: Colors.black87,
                                     fontWeight: FontWeight.bold,
-                                    fontStyle: isSaldoCalculado
+                                    fontStyle: resumo.isSaldoEstimado
                                         ? FontStyle.italic
                                         : FontStyle.normal,
                                   ),
                                 ),
                                 Text(
-                                  '${_numero.format(saldoExibicao)} kWh',
+                                  '${_numero.format(resumo.saldoAcumuladoExibicao)} kWh',
                                   style: TextStyle(
-                                    color: isSaldoCalculado
+                                    color: resumo.isSaldoEstimado
                                         ? Colors.orange.shade700
                                         : Colors.blue,
                                     fontWeight: FontWeight.bold,
@@ -1286,12 +1221,10 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                 ),
                               ],
                             ),
-                            // --------------------------------------------------
                           ],
                         ),
                       ),
 
-                      // --- A MÁGICA 3: O QUADRO DE EVIDÊNCIA (AUDITORIA FALHOU) ---
                       if (desvio > 0) ...[
                         const Divider(height: 30),
                         _buildSectionHeader(
@@ -1342,28 +1275,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                 colorValue: Colors.red.shade900,
                               ),
                               const SizedBox(height: 16),
-                              /* SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    AppFeedback.show(
-                                      context,
-                                      'Recurso em breve: Gerador Automático de Contestação para ANEEL.',
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.picture_as_pdf,
-                                    color: Colors.red,
-                                  ),
-                                  label: const Text(
-                                    'Gerar Prova de Contestação',
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    side: const BorderSide(color: Colors.red),
-                                  ),
-                                ),
-                              ), */
                             ],
                           ),
                         ),
@@ -1700,21 +1611,16 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
             ),
             const SizedBox(height: 8),
             ...widget.usina.beneficiarias.map((b) {
-              double enviadoParaEsta = 0.0;
-              try {
-                final lancFilha = Hive.box<LancamentoMensal>('lancamentos')
-                    .values
-                    .firstWhere(
-                      (l) =>
-                          l.usinaId == b.idUsinaFilha &&
-                          !l.isDeletado &&
-                          l.dataReferencia.year ==
-                              ultimoLancamento.dataReferencia.year &&
-                          l.dataReferencia.month ==
-                              ultimoLancamento.dataReferencia.month,
-                    );
-                enviadoParaEsta = lancFilha.energiaInjetadaKwh;
-              } catch (_) {}
+              double enviadoParaEsta =
+                  CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                    widget.usina,
+                    ultimoLancamento,
+                    b.idUsinaFilha,
+                  );
+
+              if (enviadoParaEsta == 0 && b.percentual > 0) {
+                return const SizedBox.shrink();
+              }
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -1815,7 +1721,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     ),
   );
 
-  // --- NOVO CARD DE PREJUÍZO ACUMULADO ---
   Widget _buildDesvioCreditosCard(double v) => Container(
     padding: const EdgeInsets.all(20),
     decoration: BoxDecoration(
@@ -1914,7 +1819,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     ),
   );
 
-  // --- CARD DO HISTÓRICO ATUALIZADO (AGORA RECEBE O DESVIO) ---
   Widget _buildLancamentoCard(LancamentoMensal item, double desvio) => Card(
     elevation: 0,
     margin: const EdgeInsets.only(bottom: 10),
