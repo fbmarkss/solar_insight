@@ -431,18 +431,22 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               ),
               const SizedBox(height: 20),
 
-              if (widget.usina.isGeradora)
+              // O Perfil da Instalação agora aparece para AMBAS (Geradora e Beneficiária)
+              _buildPerfilConsumoCard(
+                widget.usina,
+                metricas.mediaConsumo3Meses,
+              ),
+              const SizedBox(height: 20),
+
+              // O Card de Dados Técnicos aparece logo abaixo apenas se for Geradora
+              if (widget.usina.isGeradora) ...[
                 _buildDadosTecnicosCard(
                   widget.usina,
                   metricas.totalGeradoKwh,
                   lancamentos.length,
-                )
-              else
-                _buildPerfilConsumoCard(
-                  widget.usina,
-                  metricas.mediaConsumo3Meses,
                 ),
-              const SizedBox(height: 20),
+                const SizedBox(height: 20),
+              ],
 
               if (ultimoLancamento != null)
                 _buildCardPerformanceMensal(
@@ -481,11 +485,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               const SizedBox(height: 12),
               _buildSaldoCreditosCard(metricas.saldoCreditosEstimado),
               const SizedBox(height: 12),
-
-              if (metricas.totalCreditosDesviados > 0) ...[
-                _buildDesvioCreditosCard(metricas.totalCreditosDesviados),
-                const SizedBox(height: 12),
-              ],
 
               Container(
                 padding: const EdgeInsets.all(20),
@@ -566,58 +565,13 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.red.shade200),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            color: Colors.red.shade700,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Retido pela Concessionária (Taxa Mínima)',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.red.shade800,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${_numero.format(retidoConcessionaria)} kWh',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 24,
-                          color: Colors.red.shade900,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Volume de energia da rede que você consumiu, mas não pôde usar os seus créditos para abater devido à cobrança obrigatória do Custo de Disponibilidade (ex: 100 kWh/mês).',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.red.shade700,
-                          height: 1.3,
-                        ),
-                      ),
-                    ],
-                  ),
+
+                // NOVO CARD DISCRETO E UNIFICADO
+                _buildPerdasERetencoesCard(
+                  retidoConcessionaria,
+                  metricas.totalCreditosDesviados,
                 ),
+                const SizedBox(height: 12),
               ],
 
               const SizedBox(height: 25),
@@ -1525,6 +1479,10 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: const Color.fromARGB(141, 20, 68, 0),
+          width: 1.0,
+        ), //
         boxShadow: [
           BoxShadow(color: Colors.grey.withValues(alpha: 0.05), blurRadius: 15),
         ],
@@ -1538,7 +1496,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               Text(
                 'Desempenho Recente',
                 style: TextStyle(
-                  color: Colors.deepOrange.shade700,
+                  color: Color.fromARGB(255, 1, 79, 248),
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -1721,48 +1679,85 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     ),
   );
 
-  Widget _buildDesvioCreditosCard(double v) => Container(
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        colors: [Colors.red.shade600, Colors.red.shade800],
+  // NOVO WIDGET UNIFICADO (Retido e Desviado)
+  Widget _buildPerdasERetencoesCard(double retido, double desviado) {
+    if (retido == 0 && desviado == 0) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.shade300),
       ),
-      borderRadius: BorderRadius.circular(16),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.red.withValues(alpha: 0.3),
-          blurRadius: 10,
-          offset: const Offset(0, 4),
-        ),
-      ],
-    ),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        const Row(
-          children: [
-            Icon(Icons.policy, color: Colors.white, size: 20),
-            SizedBox(width: 8),
-            Text(
-              'Créditos não compensados',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                color: const Color.fromARGB(255, 252, 73, 67),
+                size: 20,
               ),
+              const SizedBox(width: 8),
+              Text(
+                'Observações da Concessionária',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade800,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (retido > 0) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Retido Total (Custo de Disponibilidade) virou crédito',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  ),
+                ),
+                Text(
+                  '${_numero.format(retido)} kWh',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+          ],
+          if (desviado > 0) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Créditos não compensados (Desvio)',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                  ),
+                ),
+                Text(
+                  '${_numero.format(desviado)} kWh',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade800,
+                  ),
+                ),
+              ],
             ),
           ],
-        ),
-        Text(
-          '- ${_numero.format(v)} kWh',
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
-          ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 
   Widget _buildCardROI(double p, double i, double r) => Container(
     padding: const EdgeInsets.all(20),
@@ -1825,20 +1820,16 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     color: Colors.white,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(12),
-      side: BorderSide(
-        color: desvio > 0 ? Colors.red.shade200 : Colors.transparent,
-      ),
+      side: BorderSide(color: Colors.blue.shade100, width: 1.0),
     ),
     child: ListTile(
       onTap: () => _mostrarDetalhesLancamento(context, item, desvio),
       leading: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
-          color: desvio > 0 ? Colors.red.shade50 : Colors.grey.shade50,
+          color: Colors.grey.shade50,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: desvio > 0 ? Colors.red.shade200 : Colors.grey.shade200,
-          ),
+          border: Border.all(color: Colors.grey.shade200),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1851,7 +1842,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               ).format(item.dataReferencia).toUpperCase(),
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                color: desvio > 0 ? Colors.red.shade800 : Colors.grey.shade800,
+                color: Colors.grey.shade800,
                 fontSize: 14,
               ),
             ),
@@ -1859,7 +1850,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               DateFormat('yyyy').format(item.dataReferencia),
               style: TextStyle(
                 fontWeight: FontWeight.w600,
-                color: desvio > 0 ? Colors.red.shade400 : Colors.grey.shade500,
+                color: Colors.grey.shade500,
                 fontSize: 10,
               ),
             ),

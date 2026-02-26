@@ -18,8 +18,8 @@ class AuditoriaGlobalTab extends StatefulWidget {
 }
 
 class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
-  // Mudamos o padrão para TUDO, assim não esconde dados antigos ao importar CSV
-  String _filtroSelecionado = 'TUDO';
+  // Padrão alterado para 'ANO' para manter o gráfico limpo e legível
+  String _filtroSelecionado = 'ANO';
 
   Future<void> _handleRefresh(BuildContext context) async {
     try {
@@ -363,8 +363,8 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
   Widget _buildFiltrosRow() {
     return Row(
       children: [
-        _buildFilterChip('Tudo', 'TUDO'),
-        const SizedBox(width: 8),
+        // _buildFilterChip('Tudo', 'TUDO'),
+        // const SizedBox(width: 8),
         _buildFilterChip('6 Meses', '6M'),
         const SizedBox(width: 8),
         _buildFilterChip('12 Meses', '12M'),
