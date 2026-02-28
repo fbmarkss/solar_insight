@@ -1,5 +1,5 @@
 // Caminho: lib/screens/visao_geral_screen.dart
-// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real, Gráfico em Onda e Alertas Modernos.
+// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real (IBGE Autocomplete, Cache, Previsão Estendida), Gráfico e Alertas.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -31,14 +31,20 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   // Navegador independente que não esconde o Menu Lateral na Web
   final GlobalKey<NavigatorState> _nestedNavKey = GlobalKey<NavigatorState>();
 
-  // Estado inicial do Clima (Atualizado via HG Brasil na Web)
+  // Estado inicial do Clima (Atualizado com mais dados)
   Map<String, dynamic> _climaData = {
-    'condicao': 'Carregando clima...',
+    'condicao': 'Carregando...',
     'temperatura': '--',
     'icone': Icons.cloud_outlined,
     'cor': Colors.grey,
-    'cidade': null,
+    'cidade': 'Detectando local...',
+    'umidade': '--',
+    'sol': '--',
+    'previsao_amanha': '',
   };
+
+  // Cache em memória para as cidades do IBGE
+  List<String> _todasCidadesCache = [];
 
   @override
   void initState() {
@@ -47,16 +53,97 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       Provider.of<DashboardProvider>(context, listen: false).atualizar();
     });
 
-    // Chama a API de clima apenas se for Web
-    if (kIsWeb) {
-      _buscarClimaReal();
-    }
+    _buscarClimaReal();
   }
 
-  // --- INTEGRAÇÃO HG BRASIL (WEB) BLINDADA CONTRA CORS ---
-  Future<void> _buscarClimaReal() async {
-    const String urlOriginal =
-        'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd&user_ip=remote';
+  // --- BUSCA CIDADES IBGE (PROTEGIDO CONTRA NULOS) ---
+  Future<Iterable<String>> _getSugestoesIBGE(String query) async {
+    if (query.isEmpty) {
+      return const Iterable<String>.empty();
+    }
+
+    // Se o cache estiver vazio, baixa da API do IBGE uma única vez
+    if (_todasCidadesCache.isEmpty) {
+      try {
+        final response = await http.get(
+          Uri.parse(
+            'https://servicodados.ibge.gov.br/api/v1/localidades/municipios',
+          ),
+        );
+        if (response.statusCode == 200) {
+          final List<dynamic> data = json.decode(response.body);
+          _todasCidadesCache = data.map((city) {
+            final nome = city['nome'] ?? '';
+            // Os sinais de '?' protegem contra cidades sem mesorregião (Ex: DF, Noronha)
+            final uf =
+                city['microrregiao']?['mesorregiao']?['UF']?['sigla'] ?? '';
+
+            return uf.isNotEmpty ? '$nome - $uf' : nome.toString();
+          }).toList();
+        }
+      } catch (e) {
+        debugPrint('Erro ao buscar IBGE: $e');
+      }
+    }
+
+    final normalizedQuery = _removerAcentosEChars(query.toLowerCase());
+    final matches = _todasCidadesCache
+        .where((cidade) {
+          return _removerAcentosEChars(
+            cidade.toLowerCase(),
+          ).contains(normalizedQuery);
+        })
+        .take(8)
+        .toList(); // Limita a 8 sugestões
+
+    return matches;
+  }
+
+  // Função auxiliar para ignorar acentos na pesquisa
+  String _removerAcentosEChars(String text) {
+    var comAcento = 'áàãâäéèêëíìîïóòõôöúùûüçñ';
+    var semAcento = 'aaaaaeeeeiiiiooooouuuucn';
+    for (int i = 0; i < comAcento.length; i++) {
+      text = text.replaceAll(comAcento[i], semAcento[i]);
+    }
+    return text;
+  }
+
+  // --- INTEGRAÇÃO HG BRASIL (CACHE INTELIGENTE E FALLBACK PARA IP) ---
+  Future<void> _buscarClimaReal({String? cidade}) async {
+    if (mounted) {
+      setState(() {
+        _climaData['condicao'] = 'Buscando...';
+      });
+    }
+
+    final box = Hive.box('sync_metadata');
+
+    // Se o usuário enviou uma cidade pelo BottomSheet
+    if (cidade != null) {
+      if (cidade.trim().isEmpty) {
+        // Se enviou vazio, significa que ele quer limpar e voltar pro IP
+        box.delete('cidade_clima');
+      } else {
+        // Salva a nova cidade no cache
+        box.put('cidade_clima', cidade);
+      }
+    }
+
+    // Tenta ler do cache
+    String? cidadeSalva = box.get('cidade_clima');
+
+    String urlOriginal =
+        'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd';
+
+    if (cidadeSalva != null && cidadeSalva.isNotEmpty) {
+      // Usa a cidade salva no cache
+      String cidadeFormatada = cidadeSalva.replaceAll(' - ', ', ');
+      urlOriginal += '&city_name=${Uri.encodeComponent(cidadeFormatada)}';
+    } else {
+      // Usuário novo ou cache limpo: usa o IP
+      urlOriginal += '&user_ip=remote';
+    }
 
     try {
       final response = await http.get(Uri.parse(urlOriginal));
@@ -66,20 +153,21 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         throw Exception("Status code não foi 200");
       }
     } catch (e) {
-      debugPrint(
-        'Bloqueio de CORS na rota direta. Tentando Proxy alternativo...',
-      );
-      try {
-        final proxyUrl = Uri.parse(
-          'https://api.allorigins.win/raw?url=${Uri.encodeComponent(urlOriginal)}',
-        );
-        final responseProxy = await http.get(proxyUrl);
-        if (responseProxy.statusCode == 200) {
-          _processarRespostaClima(responseProxy.body);
-        } else {
+      if (kIsWeb) {
+        try {
+          final proxyUrl = Uri.parse(
+            'https://api.allorigins.win/raw?url=${Uri.encodeComponent(urlOriginal)}',
+          );
+          final responseProxy = await http.get(proxyUrl);
+          if (responseProxy.statusCode == 200) {
+            _processarRespostaClima(responseProxy.body);
+          } else {
+            _definirClimaIndisponivel();
+          }
+        } catch (e2) {
           _definirClimaIndisponivel();
         }
-      } catch (e2) {
+      } else {
         _definirClimaIndisponivel();
       }
     }
@@ -90,6 +178,14 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       final data = json.decode(responseBody);
       final results = data['results'];
 
+      // Pega a previsão do dia seguinte (índice 1 no array forecast)
+      String previsaoAmanha = '';
+      if (results['forecast'] != null && results['forecast'].length > 1) {
+        final amanha = results['forecast'][1];
+        previsaoAmanha =
+            'Amanhã: ${amanha['max']}° / ${amanha['min']}° (${amanha['description']})';
+      }
+
       if (mounted) {
         setState(() {
           _climaData = {
@@ -98,6 +194,9 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             'icone': _obterIconeHg(results['condition_slug']),
             'cor': _obterCorHg(results['condition_slug']),
             'cidade': results['city'],
+            'umidade': '${results['humidity']}%',
+            'sol': '${results['sunrise']} às ${results['sunset']}',
+            'previsao_amanha': previsaoAmanha,
           };
         });
       }
@@ -109,9 +208,229 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   void _definirClimaIndisponivel() {
     if (mounted) {
       setState(() {
-        _climaData['condicao'] = 'Clima indisponível';
+        _climaData['condicao'] = 'Indisponível';
+        _climaData['temperatura'] = '--';
+        _climaData['umidade'] = '--';
+        _climaData['sol'] = '--';
+        _climaData['previsao_amanha'] = '';
       });
     }
+  }
+
+  // --- BOTTOM SHEET MODERNO COM AUTOCOMPLETE IBGE ---
+  void _mostrarBottomSheetSelecionarCidade() {
+    final box = Hive.box('sync_metadata');
+    String cidadeAtual = box.get('cidade_clima') ?? '';
+    String cidadeSelecionada = cidadeAtual;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+          ),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Row(
+                  children: [
+                    Icon(Icons.location_city, color: Colors.deepOrange),
+                    SizedBox(width: 8),
+                    Text(
+                      'Buscar Cidade',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Digite a cidade para corrigir a localização. Para voltar ao modo automático (IP), apague o texto e salve.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey,
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // --- AUTOCOMPLETE IBGE ---
+                Autocomplete<String>(
+                  initialValue: TextEditingValue(text: cidadeAtual),
+                  optionsBuilder: (TextEditingValue textEditingValue) async {
+                    return await _getSugestoesIBGE(textEditingValue.text);
+                  },
+                  onSelected: (String selection) {
+                    cidadeSelecionada = selection;
+                  },
+                  fieldViewBuilder:
+                      (context, controller, focusNode, onEditingComplete) {
+                        controller.addListener(() {
+                          cidadeSelecionada = controller.text;
+                        });
+
+                        return TextField(
+                          controller: controller,
+                          focusNode: focusNode,
+                          decoration: InputDecoration(
+                            labelText: 'Nome da cidade',
+                            hintText: 'Ex: Colatina',
+                            prefixIcon: const Icon(
+                              Icons.search,
+                              color: Colors.grey,
+                            ),
+                            suffixIcon: IconButton(
+                              icon: const Icon(
+                                Icons.clear,
+                                color: Colors.grey,
+                                size: 20,
+                              ),
+                              onPressed: () {
+                                controller.clear();
+                                cidadeSelecionada = '';
+                              },
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Colors.deepOrange,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          onSubmitted: (_) {
+                            Navigator.pop(ctx);
+                            _buscarClimaReal(cidade: cidadeSelecionada);
+                          },
+                        );
+                      },
+                  optionsViewBuilder: (context, onSelected, options) {
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4.0,
+                        borderRadius: BorderRadius.circular(12),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: 250,
+                            maxWidth: 320,
+                          ),
+                          child: ListView.builder(
+                            padding: EdgeInsets.zero,
+                            shrinkWrap: true,
+                            itemCount: options.length,
+                            itemBuilder: (BuildContext context, int index) {
+                              final String option = options.elementAt(index);
+
+                              return InkWell(
+                                onTap: () => onSelected(option),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    border: Border(
+                                      bottom: BorderSide(
+                                        color: Colors.grey.shade100,
+                                      ),
+                                    ),
+                                    color: Colors.white,
+                                  ),
+                                  padding: const EdgeInsets.all(16.0),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.location_on_outlined,
+                                        color: Colors.grey,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          option,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 24),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.deepOrange,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _buscarClimaReal(cidade: cidadeSelecionada);
+                    },
+                    child: const Text(
+                      'ATUALIZAR CLIMA',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text(
+                      'Cancelar',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                ),
+                // Espaço de segurança para não sumir atrás da barra do tablet
+                SizedBox(height: MediaQuery.of(ctx).padding.bottom + 24),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   IconData _obterIconeHg(String slug) {
@@ -141,9 +460,11 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     return Colors.blueGrey;
   }
 
-  // --- NOVA LÓGICA DE PULL-TO-REFRESH COM FEEDBACK PADRONIZADO ---
+  // --- LÓGICA DE PULL-TO-REFRESH ---
   Future<void> _handleRefresh() async {
     Provider.of<DashboardProvider>(context, listen: false).atualizar();
+    _buscarClimaReal();
+
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
       if (!mounted) return;
@@ -284,6 +605,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
 
         Widget filtro = _buildFiltro(dash);
         Widget cardAmbiental = _buildEnvironmentalCard(dash.totalGerado);
+        Widget cardClima = _buildClimaCard();
 
         List<Map<String, dynamic>> alertasTotais = List.from(
           dash.alertasDoSistema,
@@ -306,6 +628,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                       dash,
                       filtro,
                       cardAmbiental,
+                      cardClima,
                       taxaCoberturaMensal,
                       corCobertura,
                       textoCobertura,
@@ -318,6 +641,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                       dash,
                       filtro,
                       cardAmbiental,
+                      cardClima,
                       taxaCoberturaMensal,
                       corCobertura,
                       textoCobertura,
@@ -354,12 +678,13 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
 
   // =====================================================================
-  // LAYOUT WEB RESPONSIVO (WRAP)
+  // LAYOUT WEB RESPONSIVO (Nova Ordem na Coluna da Direita)
   // =====================================================================
   Widget _buildWebLayout(
     DashboardProvider dash,
     Widget filtro,
     Widget cardAmbiental,
+    Widget cardClima,
     double taxaCoberturaMensal,
     Color corCobertura,
     String textoCobertura,
@@ -435,7 +760,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                         ),
                       ),
                     ),
-                    _buildWeatherPill(_climaData),
                     SizedBox(width: 250, child: filtro),
                   ],
                 ),
@@ -506,9 +830,11 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                         textoCobertura,
                       ),
                       const SizedBox(height: 24),
-                      cardAmbiental,
-                      const SizedBox(height: 24),
                       _buildTechSummary(dash),
+                      const SizedBox(height: 24),
+                      cardClima,
+                      const SizedBox(height: 24),
+                      cardAmbiental,
                     ],
                   ),
                 ),
@@ -522,12 +848,13 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
 
   // =====================================================================
-  // LAYOUT MOBILE
+  // LAYOUT MOBILE (Ordem mantida)
   // =====================================================================
   Widget _buildMobileLayout(
     DashboardProvider dash,
     Widget filtro,
     Widget cardAmbiental,
+    Widget cardClima,
     double taxaCoberturaMensal,
     Color corCobertura,
     String textoCobertura,
@@ -587,6 +914,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           const SizedBox(height: 24),
           _buildStatsRow(dash),
           const SizedBox(height: 16),
+          cardClima,
+          const SizedBox(height: 16),
           cardAmbiental,
           const SizedBox(height: 24),
           if (alertasCompletos.isNotEmpty) ...[
@@ -611,8 +940,272 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
 
   // ===========================================================================
-  // WIDGETS DE ALERTAS (NOVO DESIGN CLEAN)
+  // WIDGETS DE ALERTAS, CLIMA E AMBIENTAL
   // ===========================================================================
+
+  Widget _buildClimaCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withValues(alpha: 0.05),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _climaData['cor'].withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      _climaData['icone'],
+                      color: _climaData['cor'],
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Clima em Tempo Real',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      SizedBox(
+                        width: 120, // Previne quebra de layout
+                        child: Text(
+                          _climaData['cidade'] ?? 'Detectando...',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade600,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              IconButton(
+                icon: Icon(
+                  Icons.edit_location_alt_outlined,
+                  color: Colors.blue.shade600,
+                ),
+                tooltip: 'Mudar Cidade',
+                onPressed: _mostrarBottomSheetSelecionarCidade,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '${_climaData['temperatura']}°C',
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              Text(
+                _climaData['condicao'],
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.blueGrey.shade600,
+                ),
+              ),
+            ],
+          ),
+
+          // --- NOVA SEÇÃO DE DADOS EXTRAS DO CLIMA ---
+          if (_climaData['temperatura'] != '--') ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Divider(height: 1),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildMiniClimaInfo(
+                  Icons.water_drop,
+                  'Umidade',
+                  _climaData['umidade'],
+                  Colors.blue,
+                ),
+                _buildMiniClimaInfo(
+                  Icons.wb_twilight,
+                  'Sol',
+                  _climaData['sol'],
+                  Colors.orange,
+                ),
+              ],
+            ),
+            if (_climaData['previsao_amanha'] != '') ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  vertical: 8,
+                  horizontal: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 14,
+                      color: Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 8),
+                    // 👇 A MÁGICA AQUI: Flexible SEM o overflow permite a quebra de linha
+                    Flexible(
+                      child: Text(
+                        _climaData['previsao_amanha'],
+                        textAlign: TextAlign
+                            .center, // Centraliza o texto se quebrar para a 2ª linha
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3, // Dá um leve respiro entre as linhas
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  // Novo widget auxiliar para organizar Umidade e Sol no card de Clima
+  Widget _buildMiniClimaInfo(
+    IconData icon,
+    String label,
+    String value,
+    Color color,
+  ) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 4),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(fontSize: 10, color: Colors.grey),
+            ),
+            Text(
+              value,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // --- NOVO CARD DE IMPACTO AMBIENTAL (COMPACTO COM CO2) ---
+  Widget _buildEnvironmentalCard(double totalGerado) {
+    double arvores =
+        totalGerado /
+        400; // Base: 1 árvore absorve cerca de 400 kWh de equivalência
+    double co2Kg =
+        totalGerado * 0.10; // Brasil: matriz limpa -> ~100g de CO2 por kWh
+    double co2Ton = co2Kg / 1000;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.green.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.forest, color: Colors.green, size: 24),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Impacto Ambiental Evitado',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '~${arvores.toStringAsFixed(0)} Árvores',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade800,
+                      ),
+                    ),
+                    Text(
+                      co2Ton < 1
+                          ? '~${co2Kg.toStringAsFixed(0)} kg CO₂'
+                          : '~${co2Ton.toStringAsFixed(2)} ton CO₂',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildAlertasSection(List<Map<String, dynamic>> alertas) {
     if (alertas.isEmpty) return const SizedBox.shrink();
@@ -638,7 +1231,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     Color corFundoIcone;
     String titulo = alerta['titulo'] ?? 'Aviso';
 
-    // Define cores baseadas no tipo ou na cor informada pelo motor
     if (alerta['tipo'] == 'otimizacao_rateio') {
       cor = Colors.green.shade600;
       corFundoIcone = Colors.green.shade50;
@@ -685,10 +1277,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
               children: [
                 const SizedBox(height: 2),
                 Text(
-                  titulo.replaceAll(
-                    '🚨 ',
-                    '',
-                  ), // Removemos o emoji se vier do motor para ficar clean
+                  titulo.replaceAll('🚨 ', ''),
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
@@ -735,7 +1324,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   }
 
   // ===========================================================================
-  // NOVO GRÁFICO DE ONDA (SPLINE)
+  // GRÁFICO DE ONDA (SPLINE)
   // ===========================================================================
   Widget _buildWaveChartCard(DashboardProvider dash, {bool isMobile = false}) {
     List<MapEntry<DateTime, double>> dados = _obterDadosGrafico(dash);
@@ -824,7 +1413,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             Expanded(
               child: CustomPaint(
                 painter: _WaveChartPainter(dados),
-                child: Container(), // Espaço preenchido pelo painter
+                child: Container(),
               ),
             ),
         ],
@@ -877,80 +1466,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           ],
           onChanged: (u) => dash.selecionarUsina(u),
         ),
-      ),
-    );
-  }
-
-  Widget _buildEnvironmentalCard(double totalGerado) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.green.shade50,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.green.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.forest, color: Colors.green, size: 28),
-          ),
-          const SizedBox(height: 16),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Impacto Ambiental',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.green,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '~${(totalGerado / 400).toStringAsFixed(0)} Árvores preservadas',
-                style: TextStyle(fontSize: 16, color: Colors.green.shade800),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildWeatherPill(Map<String, dynamic> clima) {
-    return Container(
-      height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(clima['icone'], color: clima['cor'], size: 20),
-          const SizedBox(width: 8),
-          Text(
-            '${clima['temperatura']}°C',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            clima['cidade'] != null
-                ? '${clima['condicao']} em ${clima['cidade']}'
-                : clima['condicao'],
-            style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-          ),
-        ],
       ),
     );
   }
@@ -1427,7 +1942,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // --- O NOVO WIDGET QUE EXIBE A LISTA DE RATEIO DA GERADORA ---
   Widget _buildListaDistribuicaoGeradora(DashboardProvider dash) {
     if (dash.usinaSelecionada == null ||
         dash.usinaSelecionada!.beneficiarias.isEmpty) {

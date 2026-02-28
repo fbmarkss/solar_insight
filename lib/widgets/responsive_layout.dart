@@ -45,40 +45,47 @@ class ResponsiveLayout extends StatelessWidget {
           return Scaffold(
             appBar: mobileAppBar,
             endDrawer: mobileDrawer,
-            body: pages[currentIndex],
+            // 1. MÁGICA PARA O MOBILE/TABLET EM PÉ: Protege o conteúdo central
+            body: SafeArea(child: pages[currentIndex]),
             floatingActionButton: mobileFab,
-            bottomNavigationBar: NavigationBar(
-              backgroundColor: Colors.white,
-              elevation: 4,
-              selectedIndex: mobileIndex,
-              onDestinationSelected: onTabTapped,
-              indicatorColor: Colors.deepOrange.withValues(alpha: 0.2),
-              destinations: List.generate(titulos.length, (index) {
-                return NavigationDestination(
-                  icon: Icon(icones[index]),
-                  label: titulos[index],
-                  selectedIcon: Icon(icones[index], color: Colors.deepOrange),
-                );
-              }),
+            // 2. MÁGICA PARA O MOBILE/TABLET EM PÉ: Protege o menu inferior
+            bottomNavigationBar: SafeArea(
+              child: NavigationBar(
+                backgroundColor: Colors.white,
+                elevation: 4,
+                selectedIndex: mobileIndex,
+                onDestinationSelected: onTabTapped,
+                indicatorColor: Colors.deepOrange.withValues(alpha: 0.2),
+                destinations: List.generate(titulos.length, (index) {
+                  return NavigationDestination(
+                    icon: Icon(icones[index]),
+                    label: titulos[index],
+                    selectedIcon: Icon(icones[index], color: Colors.deepOrange),
+                  );
+                }),
+              ),
             ),
           );
         } else {
           return Scaffold(
             backgroundColor: const Color(0xFFF0F2F5),
-            body: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildWebSidebar(context),
-                Expanded(
-                  child: Container(
-                    alignment: Alignment.topCenter,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 1200),
-                      child: pages[currentIndex],
+            // 3. MÁGICA PARA O TABLET DEITADO / DESKTOP: Protege o Menu e o Conteúdo
+            body: SafeArea(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildWebSidebar(context),
+                  Expanded(
+                    child: Container(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1200),
+                        child: pages[currentIndex],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
             floatingActionButton: mobileFab,
           );
@@ -108,11 +115,11 @@ class ResponsiveLayout extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 32),
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  const Color.fromARGB(255, 6, 153, 252),
-                  const Color.fromARGB(255, 162, 213, 243),
+                  Color.fromARGB(255, 6, 153, 252),
+                  Color.fromARGB(255, 162, 213, 243),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
