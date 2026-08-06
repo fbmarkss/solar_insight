@@ -1,5 +1,5 @@
 // Caminho: lib/utils/calculadora_energetica.dart
-// Descrição: Motor de cálculo energético (Com Inteligência Tarifária, Regra de Excedente ANEEL, Auditoria e Multas).
+// Descrição: Motor de cálculo energético (Com Inteligência Tarifária, Regra de Excedente ANEEL, Auditoria, Multas e Créditos de Terceiros).
 
 import 'package:hive/hive.dart';
 import '../models/usina.dart';
@@ -179,37 +179,47 @@ class CalculadoraEnergetica {
       // A geradora retém a injeção original MENOS a energia que ela exportou
       return l.energiaInjetadaKwh - energiaEnviadaParaFilhas;
     } else {
-      double recebido = l.energiaInjetadaKwh;
-      if (recebido == 0) {
-        final boxUsinas = Hive.box<Usina>('usinas');
-        final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
-        final maes = boxUsinas.values.where((u) => u.isGeradora);
+      // -------------------------------------------------------------
+      // REGRA DE OURO DA BENEFICIÁRIA (ATUALIZADA)
+      // -------------------------------------------------------------
+      double recebidoLocal = l.energiaInjetadaKwh;
 
-        for (var mae in maes) {
-          try {
-            var vigentesDaMae = _obterBeneficiariasVigentes(
-              mae,
-              l.dataReferencia,
-            );
-            var vinculo = vigentesDaMae.firstWhere(
-              (b) => b.idUsinaFilha == usina.id,
-            );
-
-            var lancMae = boxLancamentos.values.firstWhere(
-              (lm) =>
-                  lm.usinaId == mae.id &&
-                  lm.dataReferencia.year == l.dataReferencia.year &&
-                  lm.dataReferencia.month == l.dataReferencia.month &&
-                  !lm.isDeletado,
-            );
-
-            // REGRA ANEEL: A filha recebe um percentual do EXCEDENTE da mãe
-            double excedenteMae = _calcularExcedenteParaRateio(mae, lancMae);
-            recebido += (excedenteMae * (vinculo.percentual / 100));
-          } catch (_) {}
-        }
+      // PRIORIDADE 1: Se temos o crédito real explícito informado (pela IA ou Manualmente), usamos ele!
+      if (l.creditosRecebidosDeTerceiros != null &&
+          l.creditosRecebidosDeTerceiros! > 0) {
+        return recebidoLocal + l.creditosRecebidosDeTerceiros!;
       }
-      return recebido;
+
+      // PRIORIDADE 2 (FALLBACK): Não tem explícito? Calcula a teoria com base na Usina Mãe (Para faturas antigas)
+      double recebidoTeorico = 0;
+      final boxUsinas = Hive.box<Usina>('usinas');
+      final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
+      final maes = boxUsinas.values.where((u) => u.isGeradora);
+
+      for (var mae in maes) {
+        try {
+          var vigentesDaMae = _obterBeneficiariasVigentes(
+            mae,
+            l.dataReferencia,
+          );
+          var vinculo = vigentesDaMae.firstWhere(
+            (b) => b.idUsinaFilha == usina.id,
+          );
+
+          var lancMae = boxLancamentos.values.firstWhere(
+            (lm) =>
+                lm.usinaId == mae.id &&
+                lm.dataReferencia.year == l.dataReferencia.year &&
+                lm.dataReferencia.month == l.dataReferencia.month &&
+                !lm.isDeletado,
+          );
+
+          // REGRA ANEEL: A filha recebe um percentual do EXCEDENTE da mãe
+          double excedenteMae = _calcularExcedenteParaRateio(mae, lancMae);
+          recebidoTeorico += (excedenteMae * (vinculo.percentual / 100));
+        } catch (_) {}
+      }
+      return recebidoLocal + recebidoTeorico;
     }
   }
 
@@ -733,10 +743,7 @@ class CalculadoraEnergetica {
             'titulo': 'Créditos não lançados para ${usina.nome}!',
             'mensagem':
                 'A concessionária deixou de creditar  ${creditosDesviados.toStringAsFixed(0)} kWh no seu banco de créditos para a unidade ${usina.nome}.\n'
-                // '• Saldo anterior: ${saldoAnterior.toStringAsFixed(0)} kWh.\n'
-                // '• Crédito do mês: ${(saldoMensal > 0 ? "+" : "")}${saldoMensal.toStringAsFixed(0)} kWh.\n'
                 '• Saldo Total Esperado: ${saldoMatematicoEsperado.toStringAsFixed(0)} kWh.\n'
-                // '• Saldo lido na Fatura: ${saldoLidoNaFaturaAtual.toStringAsFixed(0)} kWh.\n'
                 'Verifique e conteste a sua fatura!',
             'cor': 'red',
             'icone': 'policy',

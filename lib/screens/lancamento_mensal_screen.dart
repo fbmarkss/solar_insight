@@ -38,6 +38,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   final _leituraAtualController = TextEditingController();
   final _geracaoController = TextEditingController();
   final _injetadaController = TextEditingController();
+  final _creditosTerceirosController = TextEditingController(); // NOVO
   final _consumoController = TextEditingController();
   final _tarifaController = TextEditingController(); // Usado só no manual
   final _custoDemandaController = TextEditingController();
@@ -50,9 +51,10 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
   String? _modalidadeTarifaria;
   double _teUnica = 0, _tusdUnica = 0;
   double _tePonta = 0, _tusdPonta = 0, _teForaPonta = 0, _tusdForaPonta = 0;
-  double _multaReativo = 0, _custoIluminacaoPublica = 0;
+  double _multaReativo = 0, _custoIluminacaoPublica = 0, _demandaIA = 0;
   double _consumoPonta = 0, _consumoForaPonta = 0, _consumoReservado = 0;
   double _injetadaPonta = 0, _injetadaForaPonta = 0, _injetadaReservada = 0;
+  double _saldoAnteriorIA = 0.0; // NOVO
 
   Usina? _usinaSelecionada;
   DateTime _dataReferencia = DateTime.now();
@@ -90,6 +92,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     _leituraAtualController.dispose();
     _geracaoController.dispose();
     _injetadaController.dispose();
+    _creditosTerceirosController.dispose();
     _consumoController.dispose();
     _tarifaController.dispose();
     _custoDemandaController.dispose();
@@ -128,6 +131,16 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     _consumoController.text = _formatarParaBR(l.energiaConsumidaRedeKwh);
     _valorFaturaController.text = _formatarParaBR(l.valorFaturaR);
 
+    // NOVO: Carrega os créditos recebidos de terceiros se existir
+    if (l.creditosRecebidosDeTerceiros != null &&
+        l.creditosRecebidosDeTerceiros! > 0) {
+      _creditosTerceirosController.text = _formatarParaBR(
+        l.creditosRecebidosDeTerceiros!,
+      );
+    }
+
+    _saldoAnteriorIA = l.saldoAnteriorFatura ?? 0.0;
+
     if ((l.tarifaTeUnica ?? 0) > 0 || (l.tarifaTeForaPonta ?? 0) > 0) {
       _temDadosAvancados = true;
       _grupoTarifario = l.grupoTarifario;
@@ -140,6 +153,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       _tusdForaPonta = l.tarifaTusdForaPonta ?? 0;
       _multaReativo = l.multaReativo ?? 0;
       _custoIluminacaoPublica = l.custoIluminacaoPublica ?? 0;
+      _demandaIA = l.custoDemandaR;
 
       _consumoPonta = l.consumoPonta ?? 0;
       _consumoForaPonta = l.consumoForaPonta ?? 0;
@@ -434,9 +448,14 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
     final DateTime agora = DateTime.now();
 
+    // Separação oficial das variáveis (Físico vs Contábil)
     double injetadaTratada = _converterParaDouble(_injetadaController.text);
+    double creditosTerceirosTratado = _converterParaDouble(
+      _creditosTerceirosController.text,
+    );
 
-    if (!_usinaSelecionada!.isGeradora && injetadaTratada == 0.0) {
+    // Se for beneficiária e não tiver créditos informados (fallback de estimativa antiga)
+    if (!_usinaSelecionada!.isGeradora && creditosTerceirosTratado == 0.0) {
       final boxUsinas = Hive.box<Usina>('usinas');
       final maes = boxUsinas.values.where(
         (u) =>
@@ -456,7 +475,8 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
                 lm.dataReferencia.month == _dataReferencia.month &&
                 !lm.isDeletado,
           );
-          injetadaTratada +=
+          // Alocamos a estimativa antiga no campo de crédito recebido para não sujar a injeção local
+          creditosTerceirosTratado +=
               (lancMae.energiaInjetadaKwh * (vinculo.percentual / 100));
         } catch (_) {}
       }
@@ -472,14 +492,21 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       l.leituraInversor = _usinaSelecionada!.isGeradora
           ? _converterParaDouble(_leituraAtualController.text)
           : null;
+
       l.energiaInjetadaKwh = injetadaTratada;
+      l.creditosRecebidosDeTerceiros = creditosTerceirosTratado; // NOVO
+
       l.energiaConsumidaRedeKwh = _converterParaDouble(_consumoController.text);
       l.tarifaKwh = tarifa;
       l.valorFaturaR = _converterParaDouble(_valorFaturaController.text);
 
       if (!_temDadosAvancados) {
         l.custoDemandaR = _converterParaDouble(_custoDemandaController.text);
+      } else {
+        l.custoDemandaR = _demandaIA;
+        l.saldoAnteriorFatura = _saldoAnteriorIA; // NOVO
       }
+
       l.saldoInformadoNaFatura = saldoInformado;
 
       if (_temDadosAvancados) {
@@ -518,16 +545,20 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
             ? _converterParaDouble(_geracaoController.text)
             : 0.0,
         energiaInjetadaKwh: injetadaTratada,
+        creditosRecebidosDeTerceiros: creditosTerceirosTratado, // NOVO
         energiaConsumidaRedeKwh: _converterParaDouble(_consumoController.text),
         tarifaKwh: tarifa,
         valorFaturaR: _converterParaDouble(_valorFaturaController.text),
         custoDemandaR: _temDadosAvancados
-            ? 0.0
+            ? _demandaIA
             : _converterParaDouble(_custoDemandaController.text),
         leituraInversor: _usinaSelecionada!.isGeradora
             ? _converterParaDouble(_leituraAtualController.text)
             : null,
         saldoInformadoNaFatura: saldoInformado,
+        saldoAnteriorFatura: _temDadosAvancados
+            ? _saldoAnteriorIA
+            : null, // NOVO
         tenantId: _currentUid,
         criadoPor: _currentUid,
         ultimaModificacao: agora,
@@ -571,11 +602,14 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         _leituraAtualController.clear();
         _geracaoController.clear();
         _injetadaController.clear();
+        _creditosTerceirosController.clear(); // Limpa
         _consumoController.clear();
         _valorFaturaController.clear();
         _saldoAcumuladoController.clear();
 
         _temDadosAvancados = false;
+        _demandaIA = 0.0;
+        _saldoAnteriorIA = 0.0;
 
         _dataReferencia = DateTime(
           _dataReferencia.year,
@@ -778,7 +812,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
           const Divider(height: 24),
           _buildLinhaAuditoria(
             'Demanda / CIP',
-            fmtMoeda.format(_custoIluminacaoPublica),
+            fmtMoeda.format(_demandaIA + _custoIluminacaoPublica),
             Icons.lightbulb_outline,
           ),
 
@@ -1110,13 +1144,28 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
               controller: _injetadaController,
               label: isGeradora
                   ? 'Energia Injetada (Rede)'
-                  : 'Créditos Recebidos/Aplicados',
+                  : 'Geração / Injeção Local (Se houver)',
               hint: '0,00',
               icon: Icons.upload,
               isKwh: true,
               suffix: 'kWh',
             ),
             const SizedBox(height: 12),
+
+            // --- O NOVO CAMPO: CRÉDITOS RECEBIDOS DE TERCEIROS ---
+            if (!isGeradora ||
+                _creditosTerceirosController.text.isNotEmpty) ...[
+              _buildStylishField(
+                controller: _creditosTerceirosController,
+                label: 'Créditos Recebidos (Usina Mãe)',
+                hint: '0,00',
+                icon: Icons.assignment_returned_outlined,
+                isKwh: true,
+                suffix: 'kWh',
+              ),
+              const SizedBox(height: 12),
+            ],
+
             _buildStylishField(
               controller: _consumoController,
               label: 'Energia Consumida da Rede',
@@ -1621,16 +1670,58 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
           _injetadaController.text = _formatarParaBR(totalInjetada);
         }
 
-        double demanda = (custos['demanda'] as num?)?.toDouble() ?? 0.0;
-        if (demanda > 0) {
-          _custoDemandaController.text = _formatarParaBR(demanda);
+        _demandaIA = (custos['demanda'] as num?)?.toDouble() ?? 0.0;
+        if (_demandaIA > 0) {
+          _custoDemandaController.text = _formatarParaBR(_demandaIA);
         }
 
-        double saldo =
+        double saldoAtual =
             (dadosGerais['saldoCreditosAcumuladosKwh'] as num?)?.toDouble() ??
             0.0;
-        if (saldo > 0) {
-          _saldoAcumuladoController.text = _formatarParaBR(saldo);
+        if (saldoAtual > 0) {
+          _saldoAcumuladoController.text = _formatarParaBR(saldoAtual);
+        }
+
+        // =====================================================================
+        // A MÁGICA: Detecção do "Crédito Invisível" (Transferência de Terceiros)
+        // =====================================================================
+        _saldoAnteriorIA =
+            (dadosGerais['saldoAnteriorFatura'] as num?)?.toDouble() ?? 0.0;
+
+        if (_usinaSelecionada != null && _saldoAnteriorIA > 0) {
+          final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
+          final historico = boxLanc.values
+              .where((l) => l.usinaId == _usinaSelecionada!.id && !l.isDeletado)
+              .toList();
+
+          // Pega o mês imediatamente anterior para comparar
+          DateTime mesAnterior = DateTime(
+            _dataReferencia.year,
+            _dataReferencia.month - 1,
+            1,
+          );
+
+          try {
+            var lancAnterior = historico.firstWhere(
+              (l) =>
+                  l.dataReferencia.year == mesAnterior.year &&
+                  l.dataReferencia.month == mesAnterior.month,
+            );
+
+            if (lancAnterior.saldoInformadoNaFatura != null) {
+              // Se o saldo anterior descrito na fatura nova for MAIOR do que o saldo atual da fatura velha
+              // É porque créditos entraram secretamente!
+              double diferenca =
+                  _saldoAnteriorIA - lancAnterior.saldoInformadoNaFatura!;
+
+              if (diferenca > 2.0) {
+                // Margem de segurança
+                _creditosTerceirosController.text = _formatarParaBR(diferenca);
+              }
+            }
+          } catch (_) {
+            // Se for o primeiro lançamento do app, ele não terá com quem comparar ainda. Apenas ignora.
+          }
         }
       });
     } catch (e) {

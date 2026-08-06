@@ -495,7 +495,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                     Text(
                       widget.usina.isGeradora
                           ? 'Total Exportado'
-                          : 'Total Recebido',
+                          : 'Total Recebido (Créditos)',
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
@@ -920,14 +920,14 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                     MainAxisAlignment.spaceBetween,
                                 children: [
                                   const Text(
-                                    'Crédito Aplicado (Fatura)',
+                                    'Crédito Aplicado (Total)',
                                     style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       color: Colors.green,
                                     ),
                                   ),
                                   Text(
-                                    '- ${_numero.format(creditoPratico)} kWh',
+                                    '- ${_numero.format(resumo.injetadoOuRecebido)} kWh',
                                     style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                       fontSize: 16,
@@ -946,65 +946,88 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         Icons.receipt_long,
                       ),
 
-                      if (!widget.usina.isGeradora &&
-                          listaCreditosTeoricos.isNotEmpty) ...[
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            'Origem dos Créditos (Cálculo Teórico):',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey,
+                      // NOVA LÓGICA DE EXIBIÇÃO DE ORIGEM DE CRÉDITOS
+                      if (!widget.usina.isGeradora) ...[
+                        if (lancamento.creditosRecebidosDeTerceiros != null &&
+                            lancamento.creditosRecebidosDeTerceiros! > 0) ...[
+                          if (lancamento.energiaInjetadaKwh > 0)
+                            _buildDetailRow(
+                              'Geração Local (Injetada)',
+                              '${_numero.format(lancamento.energiaInjetadaKwh)} kWh',
+                              isSubtle: true,
+                            ),
+                          _buildDetailRow(
+                            'Recebido de Terceiros (Usina Mãe)',
+                            '${_numero.format(lancamento.creditosRecebidosDeTerceiros!)} kWh',
+                            colorValue: Colors.blue,
+                          ),
+                          _buildDetailRow(
+                            'Crédito Total Disponível',
+                            '${_numero.format(resumo.injetadoOuRecebido)} kWh',
+                            boldValue: true,
+                            colorValue: Colors.green,
+                          ),
+                          const Divider(height: 16, indent: 20, endIndent: 20),
+                        ] else if (listaCreditosTeoricos.isNotEmpty) ...[
+                          const Padding(
+                            padding: EdgeInsets.only(bottom: 8),
+                            child: Text(
+                              'Origem dos Créditos (Estimativa Antiga):',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey,
+                              ),
                             ),
                           ),
-                        ),
-                        ...listaCreditosTeoricos.map(
-                          (c) => _buildDetailRow(
-                            '${c['nome']}',
-                            '${_numero.format(c['valor'])} kWh',
-                            colorValue: Colors.blueGrey,
+                          ...listaCreditosTeoricos.map(
+                            (c) => _buildDetailRow(
+                              '${c['nome']}',
+                              '${_numero.format(c['valor'])} kWh',
+                              colorValue: Colors.blueGrey,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        _buildDetailRow(
-                          'Total Teórico (Seu Direito)',
-                          '${_numero.format(totalCreditoTeorico)} kWh',
-                          boldValue: true,
-                        ),
-                        _buildDetailRow(
-                          'Crédito Aplicado (Real na Fatura)',
-                          '${_numero.format(creditoPratico)} kWh',
-                          boldValue: true,
-                          colorValue: Colors.green,
-                        ),
+                          const SizedBox(height: 8),
+                          _buildDetailRow(
+                            'Total Teórico (Seu Direito)',
+                            '${_numero.format(totalCreditoTeorico)} kWh',
+                            boldValue: true,
+                          ),
+                          _buildDetailRow(
+                            'Crédito Aplicado (Real na Fatura)',
+                            '${_numero.format(creditoPratico)} kWh',
+                            boldValue: true,
+                            colorValue: Colors.green,
+                          ),
 
-                        if ((totalCreditoTeorico - creditoPratico).abs() > 0.1)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8, bottom: 8),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.warning_amber_rounded,
-                                  color: Colors.orange,
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: Text(
-                                    'Diferença (Perda/Retenção): ${_numero.format(totalCreditoTeorico - creditoPratico)} kWh',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.orange.shade800,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                    textAlign: TextAlign.right,
+                          if ((totalCreditoTeorico - creditoPratico).abs() >
+                              0.1)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8, bottom: 8),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: Colors.orange,
+                                    size: 16,
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      'Diferença (Perda/Retenção): ${_numero.format(totalCreditoTeorico - creditoPratico)} kWh',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.orange.shade800,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      textAlign: TextAlign.right,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        const Divider(height: 16, indent: 20, endIndent: 20),
+                          const Divider(height: 16, indent: 20, endIndent: 20),
+                        ],
                       ],
 
                       if (widget.usina.isGeradora)
@@ -1576,7 +1599,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      widget.usina.isGeradora ? 'Produziu' : 'Recebeu',
+                      widget.usina.isGeradora ? 'Produziu' : 'Crédito Total',
                       style: const TextStyle(color: Colors.grey, fontSize: 12),
                     ),
                     Text(

@@ -103,8 +103,9 @@ class RelatorioAuditoriaPdf {
     // Calcula o maior valor do gráfico para escalar as barras
     double maxValGrafico = 0;
     for (var d in graficoOrdenado) {
-      if (d['custoProjetado'] > maxValGrafico)
+      if (d['custoProjetado'] > maxValGrafico) {
         maxValGrafico = d['custoProjetado'];
+      }
       if (d['custo'] > maxValGrafico) maxValGrafico = d['custo'];
     }
     if (maxValGrafico == 0) maxValGrafico = 1;
@@ -234,7 +235,7 @@ class RelatorioAuditoriaPdf {
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(
-                        '${usina.isGeradora ? "Geração Total" : "Recebimento Total"}: ${numero.format(usina.isGeradora ? metricas.totalGeradoKwh : metricas.totalInjetadoKwh)} kWh',
+                        '${usina.isGeradora ? "Geração Total" : "Crédito Total Recebido"}: ${numero.format(usina.isGeradora ? metricas.totalGeradoKwh : metricas.totalInjetadoKwh)} kWh',
                         style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                       ),
                       pw.Text(
@@ -324,13 +325,12 @@ class RelatorioAuditoriaPdf {
                     pw.SizedBox(height: 16),
                     // Gráfico de Barras
                     pw.SizedBox(
-                      height: 130, // <-- AUMENTADO O ESPAÇO TOTAL DO GRÁFICO
+                      height: 130,
                       child: pw.Row(
                         mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
                         crossAxisAlignment: pw.CrossAxisAlignment.end,
                         children: graficoOrdenado.map((d) {
-                          double alturaMax =
-                              80; // <-- REDUZIDO PARA SOBRAR MAIS ESPAÇO PARA O TEXTO
+                          double alturaMax = 80;
                           double hFundo =
                               (d['custoProjetado'] / maxValGrafico) * alturaMax;
                           double hFrente =
@@ -413,7 +413,7 @@ class RelatorioAuditoriaPdf {
             pw.TableHelper.fromTextArray(
               headers: [
                 'Mês/Ano',
-                usina.isGeradora ? 'Produziu\n(kWh)' : 'Recebeu\n(kWh)',
+                usina.isGeradora ? 'Produziu\n(kWh)' : 'Crédito Total\n(kWh)',
                 'Consumiu\n(kWh)',
                 'Fatura',
                 'Sobrou/Faltou\n(kWh)',

@@ -1,6 +1,6 @@
 // Caminho: lib/models/lancamento.dart
 // Descrição: Modelo de lançamento mensal.
-// Status: COMPLETO (Preparado para IA e Sincronização Padronizada).
+// Status: COMPLETO (Preparado para IA, Rateio Externo e Sincronização Padronizada).
 
 import 'package:hive/hive.dart';
 import '../interfaces/syncable_model.dart';
@@ -85,6 +85,13 @@ class LancamentoMensal extends HiveObject implements SyncableModel {
   @HiveField(35)
   double? multaReativo;
 
+  // --- NOVOS CAMPOS PARA AUDITORIA DE BENEFICIÁRIAS E TRANSAÇÕES INVISÍVEIS ---
+  @HiveField(36)
+  double? creditosRecebidosDeTerceiros; // O montante recebido da usina geradora
+
+  @HiveField(37)
+  double? saldoAnteriorFatura; // A leitura real do saldo do mês anterior na fatura atual
+
   LancamentoMensal({
     required this.usinaId,
     required this.dataReferencia,
@@ -122,6 +129,8 @@ class LancamentoMensal extends HiveObject implements SyncableModel {
     this.tarifaTusdForaPonta,
     this.custoIluminacaoPublica,
     this.multaReativo,
+    this.creditosRecebidosDeTerceiros,
+    this.saldoAnteriorFatura,
   }) : id =
            id ??
            DateTime.now().millisecondsSinceEpoch.toString() +
@@ -169,6 +178,8 @@ class LancamentoMensal extends HiveObject implements SyncableModel {
       'tarifaTusdForaPonta': tarifaTusdForaPonta,
       'custoIluminacaoPublica': custoIluminacaoPublica,
       'multaReativo': multaReativo,
+      'creditosRecebidosDeTerceiros': creditosRecebidosDeTerceiros,
+      'saldoAnteriorFatura': saldoAnteriorFatura,
     };
   }
 }
@@ -238,13 +249,19 @@ class LancamentoMensalAdapter extends TypeAdapter<LancamentoMensal> {
           ? fields[34] as double?
           : null,
       multaReativo: fields.containsKey(35) ? fields[35] as double? : null,
+      creditosRecebidosDeTerceiros: fields.containsKey(36)
+          ? fields[36] as double?
+          : null,
+      saldoAnteriorFatura: fields.containsKey(37)
+          ? fields[37] as double?
+          : null,
     );
   }
 
   @override
   void write(BinaryWriter writer, LancamentoMensal obj) {
     writer
-      ..writeByte(36)
+      ..writeByte(38) // Atualizado de 36 para 38 campos
       ..writeByte(0)
       ..write(obj.usinaId)
       ..writeByte(1)
@@ -316,7 +333,11 @@ class LancamentoMensalAdapter extends TypeAdapter<LancamentoMensal> {
       ..writeByte(34)
       ..write(obj.custoIluminacaoPublica)
       ..writeByte(35)
-      ..write(obj.multaReativo);
+      ..write(obj.multaReativo)
+      ..writeByte(36)
+      ..write(obj.creditosRecebidosDeTerceiros)
+      ..writeByte(37)
+      ..write(obj.saldoAnteriorFatura);
   }
 
   @override

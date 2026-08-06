@@ -41,39 +41,52 @@ class GeminiService {
       // =======================================================================
       // PROMPT SNIPER: Otimizado para EDP (Grupos A e B) e Santa Maria (Grupo B)
       // =======================================================================
-      const promptText = '''
+      const promptText = r'''
 Você é um Engenheiro Eletricista e Auditor especialista em faturamento de energia e regulamentação da ANEEL (Brasil), com foco em Geração Distribuída (Lei 14.300).
-Sua tarefa é analisar a fatura de energia elétrica em PDF e extrair os dados reais, ignorando as linhas de compensação financeira.
+Sua tarefa é analisar a fatura de energia elétrica em PDF e extrair os dados reais.
 Retorne EXCLUSIVAMENTE um objeto JSON válido.
 
 REGRAS RÍGIDAS DE EXTRAÇÃO:
-1. CLASSIFICAÇÃO DA USINA: 
-- Identifique se é Grupo A (Tensão > 2.3kV, ex: A4, Verde) ou Grupo B (Baixa Tensão).
+
+1. CLASSIFICAÇÃO DA USINA E CONCESSIONÁRIA:
+- Identifique a concessionária (EDP ou Santa Maria).
+- Identifique o Grupo Tarifário. ATENÇÃO: Contas com Tensão Nominal igual ou superior a 13.800V ou 13.8kV, ou que possuam as palavras "Subgrupo A4" ou "Grupo A", SÃO OBRIGATORIAMENTE GRUPO A. Todo o resto é Grupo B.
 
 2. CONSUMO REAL (kWh):
-- Se SANTA MARIA: Procure o quadro "Grandezas". O consumo real é o "Valor medido" da linha "Energia ativa consumo".
-- Se EDP GRUPO A: Some o consumo medido em Ponta, Fora Ponta e Reservado (busque no quadro Detalhes do Faturamento).
-- Se EDP GRUPO B: Busque o valor total de kWh da "Energia Ativa Fornecida".
+- 🚨 NUNCA utilize valores das seções de "Medidor" ou "Detalhes de Leitura" onde houver avisos de "Perdas de Transformação" (ex: 2.5%).
+- Se SANTA MARIA: Vá OBRIGATORIAMENTE no quadro "GRANDEZAS MEDIDAS". Olhe apenas a coluna "VALOR MEDIDO". Some EXCLUSIVAMENTE os valores numéricos das linhas que começam com "Energia ativa consumo" e "Energia ativa consumo horário reservado". Lance a soma em "unico". É PROIBIDO ler o "Histórico de Faturamento".
+- Se EDP GRUPO A: Busque EXCLUSIVAMENTE no quadro "DETALHES DE FATURAMENTO". Extraia a quantidade (kWh) das linhas "Energia Ativa Fornecida Ponta", "Energia Ativa Fornecida Fora Ponta" e "Energia Ativa Fornecida Reservado".
+- Se EDP GRUPO B: Busque no quadro "Detalhes do faturamento". Some as quantidades de todas as linhas que contenham "Energia Ativa Fornecida" e lance em "unico".
 
-3. ENERGIA INJETADA (kWh) - A REGRA DE OURO PARA NÃO ERRAR:
-- 🚨 PROIBIDO: NUNCA pegue valores das linhas de faturamento com palavras como "Inj. mUC", "Consumo SCEE" ou valores negativos (-). Isso é compensação, não injeção.
-- Se SANTA MARIA: Procure EXCLUSIVAMENTE no quadro "Grandezas". A injeção é o "Valor medido" da linha "Energia ativa injetada".
+3. ENERGIA INJETADA (kWh) - A REGRA DE OURO:
+- 🚨 PROIBIDO: NUNCA pegue valores das linhas de faturamento com palavras como "Inj. mUC", "Consumo SCEE" ou valores negativos (-). Isso é compensação financeira, não injeção física.
+- Se SANTA MARIA: Procure EXCLUSIVAMENTE no quadro "GRANDEZAS MEDIDAS" na coluna "VALOR MEDIDO". A injeção é o valor da linha "Energia ativa injetada".
 - Se EDP GRUPO B: Procure EXCLUSIVAMENTE no quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA" a linha "Energia Injetada no mês".
-- Se EDP GRUPO A: Procure no mesmo quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA". Separe os valores exatos de "Energia Injetada Ponta", "Energia Injetada Fora Ponta" e "Energia Injetada Reservado".
+- Se EDP GRUPO A: Procure no quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA". Extraia "Energia Injetada Ponta", "Energia Injetada Fora Ponta" e "Energia Injetada Reservado". Se não houver separação, coloque o valor total em "unico".
 
-4. TARIFAS E VALORES (R\$ e R\$/kWh):
-- Tarifas Grupo A (EDP): No final do PDF há linhas escritas "Tarifa ANEEL TUSD/TE Ponta" e "Tarifa ANEEL TUSD/TE FPonta". Extraia com todas as casas decimais.
-- Tarifas Grupo B: Extraia a tarifa unitária da linha de Consumo. Se a concessionária não separar TE e TUSD (como a Santa Maria), coloque o valor total em 'teUnica' e 0.0 em 'tusdUnica'.
-- Custos Adicionais: Demanda (R\$), Multa de Reativo (Procure por ERE ou DRE em R\$), Iluminação Pública (CIP/COSIP em R\$).
-- Saldo de Créditos: Procure por "Saldo Atualizado no mês" ou "Saldo atual".
+4. TARIFAS E VALORES (R$ e R$/kWh):
+- Tarifas EDP GRUPO A: Busque no quadro "DETALHES DE FATURAMENTO" as linhas escritas EXATAMENTE "Tarifa ANEEL TUSD/TE Ponta" e "Tarifa ANEEL TUSD/TE FPonta".
+- Tarifas GRUPO B (Santa Maria): No quadro "ITENS DA FATURA", pegue o "PREÇO UNIT.(R$)" da linha "Consumo" ou "Consumo SCEE" (o maior preço). Lance em 'teUnica' e 0.0 em 'tusdUnica'.
+- Tarifas GRUPO B (EDP): No quadro "Detalhes do faturamento", extraia o preço unitário da linha "TE - Energia Ativa Fornecida" (para 'teUnica') e da linha "TUSD - Energia Ativa Fornecida" (para 'tusdUnica').
+- Custos Adicionais e Multas: 
+  * Se EDP GRUPO A: É EXPRESSAMENTE PROIBIDO extrair Demanda e Multas do quadro final "DETALHES DE FATURAMENTO". Você DEVE ir ao quadro das primeiras páginas que possui a coluna "Valor Total R$" (que já embute os tributos). Extraia os valores de "Demanda", "Demanda Geração", "ERE..." e "DRE..." EXCLUSIVAMENTE dessa coluna.
+  * Se GRUPO B: Procure no quadro de Itens Faturados normais.
+  * Some as demandas em "demanda" e as multas em "multaReativo". Se não houver, retorne 0.0.
+- Iluminação Pública ("iluminacaoPublica"): Extraia o valor da linha "Iluminação Pública" ou "Contr. Iluminação".
+- Saldos de Crédito de Energia: Vá ao quadro de "MENSAGENS" ou "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO". Você DEVE extrair DOIS valores distintos em kWh:
+  1. Saldo Anterior ("saldoAnteriorFatura"): Localize textos como "Saldo anterior" e extraia o valor numérico (Ex: se estiver escrito "Saldo anterior 1.474,60 kWh", extraia 1474.60).
+  2. Saldo Atual ("saldoCreditosAcumuladosKwh"): Localize textos como "Saldo atual", "Saldo Total" ou "Saldo Atualizado". ATENÇÃO: A EDP costuma errar a unidade e digitar "kW" em vez de "kWh". IGNORE O ERRO e extraia o número numérico final do mês.
+🚨 PROIBIDO: NUNCA utilize valores de PIS, COFINS, Multa por atraso ou Juros.
 
 FORMATO DE SAÍDA OBRIGATÓRIO (NÃO USE MARKDOWN ```json, APENAS O TEXTO PURO):
 {
+  "debugLog": "Escreva detalhadamente de qual quadro extraiu os Saldos Anterior e Atual e quais foram os valores encontrados.",
   "dadosGerais": {
     "mesReferencia": "MM/YYYY",
     "grupoTarifario": "A",
     "modalidade": "VERDE",
     "valorTotalFatura": 0.00,
+    "saldoAnteriorFatura": 0.0,
     "saldoCreditosAcumuladosKwh": 0.0
   },
   "energiaKwh": {
@@ -101,7 +114,16 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
         try {
           debugPrint('🤖 Tentando comunicar com o modelo: $nomeModelo...');
 
-          final model = GenerativeModel(model: nomeModelo, apiKey: apiKey);
+          // INSTANCIAÇÃO ATUALIZADA COM AS TRAVAS DE SEGURANÇA E FORMATO
+          final model = GenerativeModel(
+            model: nomeModelo,
+            apiKey: apiKey,
+            generationConfig: GenerationConfig(
+              temperature: 0.0, // Elimina a aleatoriedade/criatividade da IA
+              responseMimeType:
+                  'application/json', // Força a saída estritamente em JSON
+            ),
+          );
 
           final response = await model.generateContent([
             Content.multi([prompt, pdfPart]),
@@ -120,7 +142,15 @@ Se um campo não existir na fatura, retorne 0.0 (números) ou null (textos).
 
             if (startIndex != -1 && endIndex != -1) {
               jsonPuro = jsonPuro.substring(startIndex, endIndex + 1);
-              return jsonDecode(jsonPuro);
+              final jsonFinal = jsonDecode(jsonPuro);
+
+              // AQUI ESTÁ O SEU DEBUG MAGNÍFICO:
+              debugPrint('====================================');
+              debugPrint('🕵️ O QUE A IA PENSOU:');
+              debugPrint(jsonFinal['debugLog']);
+              debugPrint('====================================');
+
+              return jsonFinal;
             } else {
               throw Exception(
                 'O texto retornado pela IA não contém um JSON válido.',
