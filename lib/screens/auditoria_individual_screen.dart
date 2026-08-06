@@ -8,6 +8,9 @@ import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../utils/calculadora_energetica.dart';
 
+// --- IMPORT NECESSÁRIO PARA A IMPRESSÃO ---
+import '../services/relatorio_auditoria_pdf.dart';
+
 class AuditoriaIndividualScreen extends StatelessWidget {
   final Usina usina;
 
@@ -31,6 +34,44 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
+        // =========================================================
+        // NOVO: BOTÃO DE IMPRESSÃO / EXPORTAÇÃO
+        // =========================================================
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.print_outlined),
+            tooltip: 'Imprimir Relatório',
+            onPressed: () async {
+              // Busca os lançamentos atualizados da Hive
+              final lancamentos = Hive.box<LancamentoMensal>('lancamentos')
+                  .values
+                  .where((l) => l.usinaId == usina.id && !l.isDeletado)
+                  .toList();
+
+              if (lancamentos.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Não há dados para imprimir.')),
+                );
+                return;
+              }
+
+              // Calcula as métricas atuais
+              final metricas = CalculadoraEnergetica.calcularMetricasGerais(
+                usina,
+                lancamentos,
+              );
+
+              // Dispara o gerador de PDF
+              await RelatorioAuditoriaPdf.gerarEImprimirPdf(
+                usina,
+                lancamentos,
+                metricas,
+              );
+            },
+          ),
+          const SizedBox(width: 8), // Um pequeno espaçamento
+        ],
+        // =========================================================
       ),
       body: ValueListenableBuilder(
         valueListenable: Hive.box<LancamentoMensal>('lancamentos').listenable(),

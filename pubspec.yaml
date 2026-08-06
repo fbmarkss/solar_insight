@@ -2,7 +2,7 @@ name: solar_insight
 description: "Gestao inteligente de usinas solares e auditoria de creditos."
 publish_to: 'none'
 
-version: 1.0.0+14
+version: 1.0.0+15
 
 environment:
   sdk: ^3.9.2
@@ -39,6 +39,8 @@ dependencies:
   path_provider: ^2.1.5
   google_generative_ai: ^0.4.7
   flutter_dotenv: ^6.0.0
+  pdf: ^3.12.0
+  printing: ^5.14.3
 
 dev_dependencies:
   flutter_test:

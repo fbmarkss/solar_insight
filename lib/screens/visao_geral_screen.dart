@@ -132,9 +132,9 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
 
     // Tenta ler do cache
     String? cidadeSalva = box.get('cidade_clima');
-
+    // chave hg brasil chave
     String urlOriginal =
-        'https://api.hgbrasil.com/weather?format=json-cors&key=c791cabd';
+        'https://api.hgbrasil.com/weather?format=json-cors&key=736c0c42';
 
     if (cidadeSalva != null && cidadeSalva.isNotEmpty) {
       // Usa a cidade salva no cache

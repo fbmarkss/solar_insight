@@ -343,9 +343,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
             (sum, l) => sum + l.energiaConsumidaRedeKwh,
           );
 
-          // ===================================================================
-          // A MÁGICA 1: CÁLCULO DE RETENÇÃO (USANDO A NOVA FONTE ÚNICA)
-          // ===================================================================
           double retidoConcessionaria = 0;
           for (var l in lancamentos) {
             final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
@@ -381,9 +378,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               'pt_BR',
             ).format(ultimo.dataReferencia).toUpperCase();
 
-            // ===================================================================
-            // A MÁGICA 2: ÚLTIMO MÊS (USANDO A NOVA FONTE ÚNICA)
-            // ===================================================================
             final resumoUltimo = CalculadoraEnergetica.gerarResumoMesOficial(
               widget.usina,
               ultimo,
@@ -431,14 +425,12 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               ),
               const SizedBox(height: 20),
 
-              // O Perfil da Instalação agora aparece para AMBAS (Geradora e Beneficiária)
               _buildPerfilConsumoCard(
                 widget.usina,
                 metricas.mediaConsumo3Meses,
               ),
               const SizedBox(height: 20),
 
-              // O Card de Dados Técnicos aparece logo abaixo apenas se for Geradora
               if (widget.usina.isGeradora) ...[
                 _buildDadosTecnicosCard(
                   widget.usina,
@@ -566,7 +558,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                 ),
                 const SizedBox(height: 12),
 
-                // NOVO CARD DISCRETO E UNIFICADO
                 _buildPerdasERetencoesCard(
                   retidoConcessionaria,
                   metricas.totalCreditosDesviados,
@@ -670,9 +661,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     LancamentoMensal lancamento,
     double desvio,
   ) {
-    // =======================================================================
-    // A MÁGICA 3: TELA DE DETALHE CEGA (A Calculadora Entrega Tudo Pronto)
-    // =======================================================================
     final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
       widget.usina,
       lancamento,
@@ -681,8 +669,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     double totalCreditoTeorico = 0;
     List<Map<String, dynamic>> listaCreditosTeoricos = [];
 
-    // O detalhamento da mãe ainda precisa ser consultado para desenhar as linhas visuais
-    if (widget.usina.isBeneficiaria) {
+    if (!widget.usina.isGeradora) {
       final boxUsinas = Hive.box<Usina>('usinas');
       final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
       final maes = boxUsinas.values.where(
@@ -720,7 +707,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       }
     }
 
-    // Apenas a variável visual para mostrar o que foi digitado na Fatura
     double creditoPratico = lancamento.energiaInjetadaKwh;
 
     showModalBottomSheet(
@@ -960,7 +946,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         Icons.receipt_long,
                       ),
 
-                      if (widget.usina.isBeneficiaria &&
+                      if (!widget.usina.isGeradora &&
                           listaCreditosTeoricos.isNotEmpty) ...[
                         const Padding(
                           padding: EdgeInsets.only(bottom: 8),
@@ -975,7 +961,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         ),
                         ...listaCreditosTeoricos.map(
                           (c) => _buildDetailRow(
-                            ' - ${c['nome']}',
+                            '${c['nome']}',
                             '${_numero.format(c['valor'])} kWh',
                             colorValue: Colors.blueGrey,
                           ),
@@ -1028,7 +1014,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                           boldValue: true,
                         ),
                       _buildDetailRow(
-                        widget.usina.isBeneficiaria
+                        !widget.usina.isGeradora
                             ? 'Gasto da Concessionária'
                             : 'Da Concessionária (Rede)',
                         '${_numero.format(resumo.consumidoDaRede)} kWh',
@@ -1358,6 +1344,29 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       taxaMinima = "50 kWh (Bifásico)";
     }
 
+    // --- NOVA LÓGICA: BUSCA REVERSA PARA BENEFICIÁRIAS (Sem depender de "tipo") ---
+    List<Map<String, dynamic>> usinasMaes = [];
+    final boxUsinas = Hive.box<Usina>('usinas');
+
+    // Busca todas as geradoras que têm ESTA unidade na lista de repasse
+    final maes = boxUsinas.values.where(
+      (u) =>
+          u.isGeradora &&
+          !u.isDeletado &&
+          u.beneficiarias.any((b) => b.idUsinaFilha.trim() == usina.id.trim()),
+    );
+
+    for (var mae in maes) {
+      final vinculo = mae.beneficiarias.firstWhere(
+        (b) => b.idUsinaFilha.trim() == usina.id.trim(),
+      );
+      usinasMaes.add({'nome': mae.nome, 'percentual': vinculo.percentual});
+    }
+
+    // Define que ela é uma beneficiária de fato SE ELA TEM UMA MÃE
+    bool isBeneficiariaDeFato = usinasMaes.isNotEmpty || !usina.isGeradora;
+    // ------------------------------------------------------------------------------
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -1417,6 +1426,55 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
             taxaMinima,
             isSubtle: true,
           ),
+
+          // --- NOVO BLOCO DE ORIGEM DE CRÉDITOS ---
+          if (isBeneficiariaDeFato && usinasMaes.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Divider(height: 1),
+            ),
+            Row(
+              children: [
+                Icon(Icons.bolt, size: 16, color: Colors.orange.shade700),
+                const SizedBox(width: 8),
+                const Text(
+                  'Recebe Créditos De:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blueGrey,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...usinasMaes.map(
+              (mae) => Padding(
+                padding: const EdgeInsets.only(bottom: 6, left: 24),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.arrow_right,
+                      size: 16,
+                      color: Colors.grey.shade400,
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        '${mae['nome']} (${mae['percentual'].toStringAsFixed(0)}%)',
+                        style: TextStyle(
+                          color: Colors.grey.shade800,
+                          fontWeight: FontWeight.w500,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          // ----------------------------------------
         ],
       ),
     );
@@ -1858,7 +1916,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
         ),
       ),
       title: Text(
-        '${_numero.format(widget.usina.isGeradora ? item.geracaoTotalKwh : item.energiaConsumidaRedeKwh)} kWh',
+        '${_numero.format(!widget.usina.isGeradora ? item.energiaConsumidaRedeKwh : item.geracaoTotalKwh)} kWh',
         style: const TextStyle(fontWeight: FontWeight.bold),
       ),
       trailing: Row(
