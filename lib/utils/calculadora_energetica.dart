@@ -5,9 +5,6 @@ import 'package:hive/hive.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 
-// --- CLASSES DE DADOS (Contêineres de Resultados) ---
-
-// NOVO: Pacote Oficial de Dados do Mês (A Fonte Única da Verdade)
 class ResumoMesOficial {
   final double geracaoTotal;
   final double autoconsumo;
@@ -15,7 +12,7 @@ class ResumoMesOficial {
   final double consumidoDaRede;
   final double injetadoOuRecebido;
   final double taxaMinimaRetida;
-  final double sobraFisicaDoMes; // Excedente final após deduções e rateios
+  final double sobraFisicaDoMes;
   final double saldoAcumuladoExibicao;
   final bool isSaldoEstimado;
 
@@ -37,11 +34,9 @@ class MetricasGerais {
   final double totalInjetadoKwh;
   final double totalAutoconsumoKwh;
   final double valorTotalEconomizadoR;
-  // --- NOVOS CAMPOS AUDITORIA PRO ---
-  final double custoFixoInevitavelR; // Demanda + Iluminação Pública
-  final double totalMultasReativoR; // Dinheiro jogado no lixo
-  final double totalCreditosDesviados; // O Placar do Prejuízo!
-  // ----------------------------------
+  final double custoFixoInevitavelR;
+  final double totalMultasReativoR;
+  final double totalCreditosDesviados;
   final double percentualRoi;
   final double mediaGeracao3Meses;
   final double mediaConsumo3Meses;
@@ -93,10 +88,6 @@ class RelatorioMensal {
 }
 
 class CalculadoraEnergetica {
-  // ===========================================================================
-  // MÉTODOS AUXILIARES
-  // ===========================================================================
-
   static double _obterCustoDisponibilidade(Usina usina) {
     String t = usina.tipo.toLowerCase();
     if (t.contains('monof')) {
@@ -108,7 +99,6 @@ class CalculadoraEnergetica {
     return 100.0;
   }
 
-  // --- HELPER: FILTRO DE HISTÓRICO DE VIGÊNCIA ---
   static Iterable<BeneficiariaItem> _obterBeneficiariasVigentes(
     Usina usina,
     DateTime dataFatura,
@@ -142,25 +132,21 @@ class CalculadoraEnergetica {
     });
   }
 
-  // --- NOVO HELPER ANEEL: CALCULA O EXCEDENTE DA GERADORA ---
   static double _calcularExcedenteParaRateio(
     Usina geradora,
     LancamentoMensal l,
   ) {
     double custoDisp = _obterCustoDisponibilidade(geradora);
 
-    // Calcula quanto da energia consumida pode ser compensada
     double consumoAbativel = l.energiaConsumidaRedeKwh > custoDisp
         ? l.energiaConsumidaRedeKwh - custoDisp
         : 0.0;
 
-    // O excedente é a injeção menos o que a geradora já engoliu para ela mesma
     double excedente = l.energiaInjetadaKwh - consumoAbativel;
 
     return excedente > 0 ? excedente : 0.0;
   }
 
-  // --- HELPER CENTRALIZADO PARA EVITAR REPETIÇÃO DE CÓDIGO ---
   static double _calcularCreditoRecebidoLiquido(
     Usina usina,
     LancamentoMensal l,
@@ -172,25 +158,22 @@ class CalculadoraEnergetica {
         (sum, b) => sum + b.percentual,
       );
 
-      // REGRA ANEEL: O rateio é sobre o EXCEDENTE (a sobra), não sobre o total injetado
       double excedente = _calcularExcedenteParaRateio(usina, l);
       double energiaEnviadaParaFilhas = excedente * (percentualEnviado / 100);
 
-      // A geradora retém a injeção original MENOS a energia que ela exportou
-      return l.energiaInjetadaKwh - energiaEnviadaParaFilhas;
+      // --- MÁGICA HÍBRIDA: Geradora também pode receber créditos externos ---
+      double recebidoLocal = l.energiaInjetadaKwh;
+      double creditosExternos = l.creditosRecebidosDeTerceiros ?? 0.0;
+
+      return (recebidoLocal + creditosExternos) - energiaEnviadaParaFilhas;
     } else {
-      // -------------------------------------------------------------
-      // REGRA DE OURO DA BENEFICIÁRIA (ATUALIZADA)
-      // -------------------------------------------------------------
       double recebidoLocal = l.energiaInjetadaKwh;
 
-      // PRIORIDADE 1: Se temos o crédito real explícito informado (pela IA ou Manualmente), usamos ele!
       if (l.creditosRecebidosDeTerceiros != null &&
           l.creditosRecebidosDeTerceiros! > 0) {
         return recebidoLocal + l.creditosRecebidosDeTerceiros!;
       }
 
-      // PRIORIDADE 2 (FALLBACK): Não tem explícito? Calcula a teoria com base na Usina Mãe (Para faturas antigas)
       double recebidoTeorico = 0;
       final boxUsinas = Hive.box<Usina>('usinas');
       final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
@@ -214,7 +197,6 @@ class CalculadoraEnergetica {
                 !lm.isDeletado,
           );
 
-          // REGRA ANEEL: A filha recebe um percentual do EXCEDENTE da mãe
           double excedenteMae = _calcularExcedenteParaRateio(mae, lancMae);
           recebidoTeorico += (excedenteMae * (vinculo.percentual / 100));
         } catch (_) {}
@@ -223,9 +205,6 @@ class CalculadoraEnergetica {
     }
   }
 
-  // ===========================================================================
-  // A NOVA FONTE ÚNICA DE VERDADE (SINGLE SOURCE OF TRUTH)
-  // ===========================================================================
   static ResumoMesOficial gerarResumoMesOficial(
     Usina usina,
     LancamentoMensal lancamento,
@@ -234,33 +213,26 @@ class CalculadoraEnergetica {
     double geracao = usina.isGeradora ? lancamento.geracaoTotalKwh : 0.0;
     double injetadoReal = lancamento.energiaInjetadaKwh;
 
-    // 1. Autoconsumo: Só existe se gerou mais do que injetou na rede
     double autoconsumo = usina.isGeradora
         ? (geracao - injetadoReal).clamp(0.0, double.infinity)
         : 0.0;
 
-    // 2. Consumo Físico no Local
     double consumoRede = lancamento.energiaConsumidaRedeKwh;
     double consumoRealLocal = autoconsumo + consumoRede;
 
-    // 3. Taxa Mínima Cobrada Pela Concessionária
     double taxaMinimaRetida = consumoRede < taxaMin ? consumoRede : taxaMin;
 
-    // 4. Crédito que entrou no mês para a Unidade
     double creditoRecebidoLiquido = _calcularCreditoRecebidoLiquido(
       usina,
       lancamento,
     );
 
-    // 5. Consumo que pode ser abatido
     double consumoAbativel = consumoRede > taxaMin
         ? consumoRede - taxaMin
         : 0.0;
 
-    // 6. A Sobra Física de Créditos (Vai alimentar o saldo ou consumir dele)
     double sobraFisicaDoMes = creditoRecebidoLiquido - consumoAbativel;
 
-    // 7. Cálculo do Saldo Final
     double saldoExibicao = lancamento.saldoInformadoNaFatura ?? 0.0;
     bool isEstimado = false;
 
@@ -285,9 +257,9 @@ class CalculadoraEnergetica {
       isEstimado = true;
     }
 
-    // 8. O que mostrar na UI para "Exportou" (Geradora) ou "Recebeu" (Beneficiária)
+    // Reflete os créditos recebidos de terceiros na UI da Geradora também
     double injetadoOuRecebidoUi = usina.isGeradora
-        ? injetadoReal
+        ? injetadoReal + (lancamento.creditosRecebidosDeTerceiros ?? 0.0)
         : creditoRecebidoLiquido;
 
     return ResumoMesOficial(
@@ -303,9 +275,6 @@ class CalculadoraEnergetica {
     );
   }
 
-  // ===========================================================================
-  // 0. CÁLCULO DE POTÊNCIA EFETIVA
-  // ===========================================================================
   static double calcularPotenciaEfetiva(Usina usina) {
     double potenciaPaineisDc = usina.potenciaTotalPaineisKwp;
     double potenciaInversoresAc = 0;
@@ -331,9 +300,6 @@ class CalculadoraEnergetica {
     }
   }
 
-  // ===========================================================================
-  // 1. CÁLCULO MACRO (DASHBOARD / VIDA ÚTIL) - COM INTELIGÊNCIA IA
-  // ===========================================================================
   static MetricasGerais calcularMetricasGerais(
     Usina usina,
     List<LancamentoMensal> historico,
@@ -381,7 +347,10 @@ class CalculadoraEnergetica {
 
       if (usina.isGeradora) {
         somaGeracao += l.geracaoTotalKwh;
-        somaInjetadaHistorico += l.energiaInjetadaKwh;
+
+        // Híbrido: A Geradora agora também registra na métrica global os créditos que recebeu de fora
+        somaInjetadaHistorico +=
+            l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
 
         double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
           0,
@@ -464,9 +433,6 @@ class CalculadoraEnergetica {
     );
   }
 
-  // ===========================================================================
-  // 1.5 O AUDITOR INDIVIDUAL DE MÊS A MÊS (Para colocar selos na UI)
-  // ===========================================================================
   static double calcularDesvioDoMes(
     Usina usina,
     LancamentoMensal atual,
@@ -496,9 +462,6 @@ class CalculadoraEnergetica {
     return desvio > 5.0 ? desvio : 0.0;
   }
 
-  // ===========================================================================
-  // 2. CÁLCULO MENSAL (ABAS DE AUDITORIA / LISTA)
-  // ===========================================================================
   static RelatorioMensal calcular(
     Usina geradora,
     LancamentoMensal lancamentoGeradora,
@@ -518,7 +481,6 @@ class CalculadoraEnergetica {
     );
 
     for (var vinculo in vigentes) {
-      // REGRA ANEEL APLICADA NO BALANÇO MENSAL:
       double creditoDireito = excedenteParaRateio * (vinculo.percentual / 100);
 
       var lancamentoFilha = boxLancamentos.values.firstWhere(
@@ -575,7 +537,6 @@ class CalculadoraEnergetica {
       double energiaEnviadaParaFilhas =
           excedenteParaRateio * (percentualTotalFilhas / 100);
 
-      // O que sobra pra Geradora é tudo que ela injetou, menos o que exportou pras filhas
       double creditoGeradoraTotal =
           lancamentoGeradora.energiaInjetadaKwh - energiaEnviadaParaFilhas;
 
@@ -593,7 +554,6 @@ class CalculadoraEnergetica {
           percentual: percGeradora,
           creditoRecebido: creditoGeradoraTotal,
           consumoReal: lancamentoGeradora.energiaConsumidaRedeKwh,
-          // O Saldo da geradora é o que restou após exportar e APÓS abater o próprio consumo
           saldo: creditoGeradoraTotal - consumoAbativelGeradora,
         ),
       );
@@ -606,9 +566,6 @@ class CalculadoraEnergetica {
     );
   }
 
-  // ===========================================================================
-  // 3. ALERTAS DE GESTÃO - EVOLUÇÃO PRO (Multas, Perdas e Auditoria de Saldo)
-  // ===========================================================================
   static List<Map<String, dynamic>> gerarAlertasDeGestao(
     Usina usina,
     LancamentoMensal? ultimo,
@@ -619,7 +576,6 @@ class CalculadoraEnergetica {
       return alertas;
     }
 
-    // --- ALERTA PRO 1: MULTA DE ENERGIA REATIVA ---
     if ((ultimo.multaReativo ?? 0) > 0) {
       alertas.add({
         'tipo': 'fuga_dinheiro',
@@ -631,7 +587,6 @@ class CalculadoraEnergetica {
       });
     }
 
-    // --- ALERTA PRO 2: ALTO CUSTO DE DEMANDA / FIXO ---
     double custosFixos =
         ultimo.custoDemandaR + (ultimo.custoIluminacaoPublica ?? 0);
     if (ultimo.valorFaturaR > 0 && (custosFixos / ultimo.valorFaturaR) > 0.6) {
@@ -673,19 +628,10 @@ class CalculadoraEnergetica {
       }
     }
 
-    double creditoRecebidoNoMes = _calcularCreditoRecebidoLiquido(
-      usina,
-      ultimo,
-    );
-    double consumo = ultimo.energiaConsumidaRedeKwh;
+    final resumo = gerarResumoMesOficial(usina, ultimo);
 
-    double taxaMinima = _obterCustoDisponibilidade(usina);
-    double consumoAbativel = consumo > taxaMinima ? consumo - taxaMinima : 0.0;
-
-    double saldoMensal = creditoRecebidoNoMes - consumoAbativel;
-
-    if (saldoMensal < 0) {
-      double deficit = saldoMensal.abs();
+    if (resumo.sobraFisicaDoMes < 0) {
+      double deficit = resumo.sobraFisicaDoMes.abs();
       double saldoDoMesAnterior = 0.0;
       if (historico.length >= 2) {
         saldoDoMesAnterior = historico[1].saldoInformadoNaFatura ?? 0.0;
@@ -722,42 +668,27 @@ class CalculadoraEnergetica {
       }
     }
 
-    if (historico.length >= 2 && ultimo.saldoInformadoNaFatura != null) {
-      final mesAnterior = historico[1];
+    LancamentoMensal? anterior = historico.length >= 2 ? historico[1] : null;
+    double desvioDaConcessionaria = calcularDesvioDoMes(
+      usina,
+      ultimo,
+      anterior,
+    );
 
-      if (mesAnterior.saldoInformadoNaFatura != null) {
-        double saldoAnterior = mesAnterior.saldoInformadoNaFatura!;
-        double saldoMatematicoEsperado = saldoAnterior + saldoMensal;
-
-        if (saldoMatematicoEsperado < 0) {
-          saldoMatematicoEsperado = 0;
-        }
-
-        double saldoLidoNaFaturaAtual = ultimo.saldoInformadoNaFatura!;
-
-        if (saldoMatematicoEsperado - saldoLidoNaFaturaAtual > 5.0) {
-          double creditosDesviados =
-              saldoMatematicoEsperado - saldoLidoNaFaturaAtual;
-          alertas.add({
-            'tipo': 'creditos_desviados',
-            'titulo': 'Créditos não lançados para ${usina.nome}!',
-            'mensagem':
-                'A concessionária deixou de creditar  ${creditosDesviados.toStringAsFixed(0)} kWh no seu banco de créditos para a unidade ${usina.nome}.\n'
-                '• Saldo Total Esperado: ${saldoMatematicoEsperado.toStringAsFixed(0)} kWh.\n'
-                'Verifique e conteste a sua fatura!',
-            'cor': 'red',
-            'icone': 'policy',
-          });
-        }
-      }
+    if (desvioDaConcessionaria > 0) {
+      alertas.add({
+        'tipo': 'creditos_desviados',
+        'titulo': 'Créditos não lançados para ${usina.nome}!',
+        'mensagem':
+            'A concessionária deixou de creditar  ${desvioDaConcessionaria.toStringAsFixed(0)} kWh no seu banco de créditos para a unidade ${usina.nome}. Verifique e conteste a sua fatura!',
+        'cor': 'red',
+        'icone': 'policy',
+      });
     }
 
     return alertas;
   }
 
-  // ===========================================================================
-  // 4. SAÚDE E TENDÊNCIA
-  // ===========================================================================
   static Map<String, dynamic> calcularSaudeSistema(
     Usina usina,
     List<LancamentoMensal> lancamentos,
@@ -789,9 +720,6 @@ class CalculadoraEnergetica {
     return calcularPotenciaEfetiva(usina) * 120.0;
   }
 
-  // ===========================================================================
-  // 5. HELPERS DE AUDITORIA
-  // ===========================================================================
   static double obterTotalDistribuidoNoMes(
     Usina geradora,
     LancamentoMensal lancamentoMae,
@@ -834,9 +762,6 @@ class CalculadoraEnergetica {
     }
   }
 
-  // ===========================================================================
-  // 6. MOTOR DE OTIMIZAÇÃO (O "DINHEIRO NA MESA")
-  // ===========================================================================
   static List<Map<String, dynamic>> gerarAlertaDeOtimizacaoDeRateio() {
     List<Map<String, dynamic>> alertasGerais = [];
 
@@ -869,16 +794,11 @@ class CalculadoraEnergetica {
         );
         var ultimoLancamento = lancamentosFilha.first;
 
-        double taxaMinima = _obterCustoDisponibilidade(filha);
-        double consumoAbativel =
-            ultimoLancamento.energiaConsumidaRedeKwh > taxaMinima
-            ? ultimoLancamento.energiaConsumidaRedeKwh - taxaMinima
-            : 0.0;
+        final resumo = gerarResumoMesOficial(filha, ultimoLancamento);
 
-        double deficitDoMes =
-            consumoAbativel - ultimoLancamento.energiaInjetadaKwh;
+        if (resumo.sobraFisicaDoMes < 0) {
+          double deficitDoMes = resumo.sobraFisicaDoMes.abs();
 
-        if (deficitDoMes > 0) {
           for (var mae in geradoras) {
             var vigentesNaMae = _obterBeneficiariasVigentes(
               mae,
@@ -892,7 +812,7 @@ class CalculadoraEnergetica {
                   'tipo': 'otimizacao_rateio',
                   'titulo': 'Oportunidade de Economia ! ${filha.nome}',
                   'mensagem':
-                      'A unidade ${filha.nome} pagou conta este mês, enquanto a usina ${mae.nome} tem saldo sobrando.\nRecomendação: Aumente o % de rateio para a ${filha.nome}!',
+                      'A unidade ${filha.nome} consumiu reservas (ou pagou conta) este mês, enquanto a usina ${mae.nome} tem saldo sobrando.\nRecomendação: Aumente o % de rateio para a ${filha.nome}!',
                   'cor': 'green',
                   'icone': 'lightbulb_circle',
                 });

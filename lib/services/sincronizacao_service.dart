@@ -1,5 +1,5 @@
 // Caminho: lib/services/sincronizacao_service.dart
-// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA e Rateios), Garbage Collector Agressivo.
+// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA, Rateios e Créditos de Terceiros), Garbage Collector Agressivo.
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -565,6 +565,10 @@ class SincronizacaoService {
       'ultimaAtualizacao': FieldValue.serverTimestamp(),
       'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
 
+      // --- OS DOIS NOVOS CAMPOS ADICIONADOS AQUI ---
+      'creditosRecebidosDeTerceiros': l.creditosRecebidosDeTerceiros,
+      'saldoAnteriorFatura': l.saldoAnteriorFatura,
+
       // --- CAMPOS DA IA ---
       'grupoTarifario': l.grupoTarifario,
       'modalidadeTarifaria': l.modalidadeTarifaria,
@@ -611,6 +615,11 @@ class SincronizacaoService {
       saldoInformadoNaFatura: (map['saldoInformadoNaFatura'] as num?)
           ?.toDouble(),
 
+      // --- LENDO OS DOIS NOVOS CAMPOS AQUI ---
+      creditosRecebidosDeTerceiros:
+          (map['creditosRecebidosDeTerceiros'] as num?)?.toDouble(),
+      saldoAnteriorFatura: (map['saldoAnteriorFatura'] as num?)?.toDouble(),
+
       // Campos da IA
       grupoTarifario: map['grupoTarifario'],
       modalidadeTarifaria: map['modalidadeTarifaria'],
@@ -647,6 +656,10 @@ class SincronizacaoService {
     l.isDeletado = lNuvem.isDeletado;
     l.ultimaModificacao = lNuvem.ultimaModificacao;
     l.saldoInformadoNaFatura = lNuvem.saldoInformadoNaFatura;
+
+    // --- ATUALIZANDO OS DOIS NOVOS CAMPOS ---
+    l.creditosRecebidosDeTerceiros = lNuvem.creditosRecebidosDeTerceiros;
+    l.saldoAnteriorFatura = lNuvem.saldoAnteriorFatura;
 
     // IA
     l.grupoTarifario = lNuvem.grupoTarifario;

@@ -69,25 +69,43 @@ class RelatorioAuditoriaPdf {
         },
       );
 
-      final resumo = CalculadoraEnergetica.gerarResumoMesOficial(usina, l);
-      double energiaEfetivamentePoupada = 0;
-
-      if (usina.isGeradora) {
-        double energiaCompensada = l.energiaInjetadaKwh.clamp(
-          0.0,
-          l.energiaConsumidaRedeKwh,
-        );
-        energiaEfetivamentePoupada = resumo.autoconsumo + energiaCompensada;
+      // --- CORREÇÃO 1: TARIFA INTELIGENTE NO PDF ---
+      double tarifaReal = l.tarifaKwh;
+      if (l.grupoTarifario == 'A' ||
+          l.modalidadeTarifaria == 'VERDE' ||
+          l.modalidadeTarifaria == 'AZUL') {
+        if ((l.tarifaTeForaPonta ?? 0) > 0) {
+          tarifaReal = l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
+        }
       } else {
-        double energiaCompensada = resumo.injetadoOuRecebido.clamp(
-          0.0,
-          l.energiaConsumidaRedeKwh,
-        );
-        energiaEfetivamentePoupada = energiaCompensada;
+        if ((l.tarifaTeUnica ?? 0) > 0) {
+          tarifaReal = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
+        }
+      }
+      if (tarifaReal <= 0) {
+        tarifaReal = l.tarifaKwh;
       }
 
-      double economiaFinanceira = energiaEfetivamentePoupada * l.tarifaKwh;
+      // --- CORREÇÃO 2: DADOS REAIS DO FORMULÁRIO (Igual à tela) ---
+      double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
+        0.0,
+        double.infinity,
+      );
+      double creditosTotaisDisponiveis =
+          l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
+
+      // A energia compensada real é limitada ao que ele consumiu da rede
+      double energiaCompensada = creditosTotaisDisponiveis.clamp(
+        0.0,
+        l.energiaConsumidaRedeKwh,
+      );
+
+      double energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
+
+      // Usa a tarifaReal em vez de l.tarifaKwh
+      double economiaFinanceira = energiaEfetivamentePoupada * tarifaReal;
       double custoProjetado = l.valorFaturaR + economiaFinanceira;
+      // ----------------------------------------------------------------
 
       dadosMensais[key]!['custo'] =
           (dadosMensais[key]!['custo'] as double) + l.valorFaturaR;
@@ -200,7 +218,7 @@ class RelatorioAuditoriaPdf {
                     crossAxisAlignment: pw.CrossAxisAlignment.end,
                     children: [
                       pw.Text(
-                        'Tipo: ${usina.isGeradora ? "Geradora" : "Beneficiária"}',
+                        'Tipo: ${usina.isGeradora ? "Geradora" : "Beneficiária (Consumidora)"}',
                       ),
                       pw.Text(
                         'Concessionária: ${usina.concessionaria.isEmpty ? "Não informada" : usina.concessionaria}',
@@ -235,7 +253,7 @@ class RelatorioAuditoriaPdf {
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(
-                        '${usina.isGeradora ? "Geração Total" : "Crédito Total Recebido"}: ${numero.format(usina.isGeradora ? metricas.totalGeradoKwh : metricas.totalInjetadoKwh)} kWh',
+                        'Volume Compensado: ${numero.format(usina.isGeradora ? metricas.totalGeradoKwh : metricas.totalInjetadoKwh)} kWh',
                         style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                       ),
                       pw.Text(
@@ -413,7 +431,7 @@ class RelatorioAuditoriaPdf {
             pw.TableHelper.fromTextArray(
               headers: [
                 'Mês/Ano',
-                usina.isGeradora ? 'Produziu\n(kWh)' : 'Crédito Total\n(kWh)',
+                'Energia Total\n(kWh)', // Genérico para cobrir todos os 3 cenários
                 'Consumiu\n(kWh)',
                 'Fatura',
                 'Sobrou/Faltou\n(kWh)',
@@ -443,13 +461,17 @@ class RelatorioAuditoriaPdf {
                   anterior,
                 );
 
+                // Lógica de "Energia Total" baseada APENAS no formulário
+                double energiaTotal = l.geracaoTotalKwh;
+                if (energiaTotal == 0 && l.energiaInjetadaKwh > 0) {
+                  energiaTotal = l
+                      .energiaInjetadaKwh; // Caso só lance injeção e não a geração bruta
+                }
+                energiaTotal += (l.creditosRecebidosDeTerceiros ?? 0.0);
+
                 return [
                   DateFormat('MM/yyyy').format(l.dataReferencia),
-                  numero.format(
-                    usina.isGeradora
-                        ? resumo.geracaoTotal
-                        : resumo.injetadoOuRecebido,
-                  ),
+                  numero.format(energiaTotal),
                   numero.format(resumo.consumoRealLocal),
                   moeda.format(l.valorFaturaR),
                   '${resumo.sobraFisicaDoMes >= 0 ? "+" : ""}${numero.format(resumo.sobraFisicaDoMes)}',

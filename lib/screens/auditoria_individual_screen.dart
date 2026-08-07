@@ -7,8 +7,6 @@ import 'package:intl/intl.dart' hide TextDirection;
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../utils/calculadora_energetica.dart';
-
-// --- IMPORT NECESSÁRIO PARA A IMPRESSÃO ---
 import '../services/relatorio_auditoria_pdf.dart';
 
 class AuditoriaIndividualScreen extends StatelessWidget {
@@ -34,15 +32,11 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
-        // =========================================================
-        // NOVO: BOTÃO DE IMPRESSÃO / EXPORTAÇÃO
-        // =========================================================
         actions: [
           IconButton(
             icon: const Icon(Icons.print_outlined),
             tooltip: 'Imprimir Relatório',
             onPressed: () async {
-              // Busca os lançamentos atualizados da Hive
               final lancamentos = Hive.box<LancamentoMensal>('lancamentos')
                   .values
                   .where((l) => l.usinaId == usina.id && !l.isDeletado)
@@ -55,13 +49,11 @@ class AuditoriaIndividualScreen extends StatelessWidget {
                 return;
               }
 
-              // Calcula as métricas atuais
               final metricas = CalculadoraEnergetica.calcularMetricasGerais(
                 usina,
                 lancamentos,
               );
 
-              // Dispara o gerador de PDF
               await RelatorioAuditoriaPdf.gerarEImprimirPdf(
                 usina,
                 lancamentos,
@@ -69,9 +61,8 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               );
             },
           ),
-          const SizedBox(width: 8), // Um pequeno espaçamento
+          const SizedBox(width: 8),
         ],
-        // =========================================================
       ),
       body: ValueListenableBuilder(
         valueListenable: Hive.box<LancamentoMensal>('lancamentos').listenable(),
@@ -96,9 +87,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
             lancamentos,
           );
 
-          // ===================================================================
-          // PROCESSAMENTO DE DADOS PARA OS GRÁFICOS (USANDO FONTE ÚNICA)
-          // ===================================================================
           Map<String, Map<String, dynamic>> dadosMensais = {};
 
           for (var l in lancamentos) {
@@ -127,32 +115,53 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               },
             );
 
-            // A MÁGICA: Extrai tudo pré-mastigado da calculadora
             final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
               usina,
               l,
             );
 
-            double energiaEfetivamentePoupada = 0;
-
-            if (usina.isGeradora) {
-              double energiaCompensada = l.energiaInjetadaKwh.clamp(
-                0.0,
-                l.energiaConsumidaRedeKwh,
-              );
-              energiaEfetivamentePoupada =
-                  resumo.autoconsumo + energiaCompensada;
-              dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
+            // =================================================================
+            // CORREÇÃO 1: TARIFA INTELIGENTE
+            // Identifica se tem Tarifa TE + TUSD da IA, senão usa manual.
+            // =================================================================
+            double tarifaReal = l.tarifaKwh;
+            if (l.grupoTarifario == 'A' ||
+                l.modalidadeTarifaria == 'VERDE' ||
+                l.modalidadeTarifaria == 'AZUL') {
+              if ((l.tarifaTeForaPonta ?? 0) > 0) {
+                tarifaReal =
+                    l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
+              }
             } else {
-              double energiaCompensada = resumo.injetadoOuRecebido.clamp(
-                0.0,
-                l.energiaConsumidaRedeKwh,
-              );
-              energiaEfetivamentePoupada = energiaCompensada;
+              if ((l.tarifaTeUnica ?? 0) > 0) {
+                tarifaReal = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
+              }
+            }
+            if (tarifaReal <= 0) {
+              tarifaReal = l.tarifaKwh;
             }
 
-            double economiaFinanceira =
-                energiaEfetivamentePoupada * l.tarifaKwh;
+            // =================================================================
+            // CORREÇÃO 2: DADOS REAIS DO FORMULÁRIO PARA CÁLCULO DE ECONOMIA
+            // =================================================================
+            double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
+                .clamp(0.0, double.infinity);
+            double creditosTotaisDisponiveis =
+                l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
+
+            double energiaCompensada = creditosTotaisDisponiveis.clamp(
+              0.0,
+              l.energiaConsumidaRedeKwh,
+            );
+
+            double energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
+
+            if (usina.isGeradora) {
+              dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
+            }
+
+            // Economia agora é calculada usando a tarifa real extraída
+            double economiaFinanceira = energiaEfetivamentePoupada * tarifaReal;
             double custoProjetado = l.valorFaturaR + economiaFinanceira;
 
             dadosMensais[key]!['consumo'] += resumo.consumoRealLocal;
@@ -166,13 +175,11 @@ class AuditoriaIndividualScreen extends StatelessWidget {
             (a, b) => (a['date'] as DateTime).compareTo(b['date']),
           );
 
-          // Limita aos últimos 12 meses para os gráficos não ficarem esmagados
           if (graficoOrdenado.length > 12) {
             graficoOrdenado = graficoOrdenado.sublist(
               graficoOrdenado.length - 12,
             );
           }
-          // ===================================================================
 
           return ListView(
             padding: const EdgeInsets.all(20),
@@ -200,12 +207,10 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               const SizedBox(height: 16),
               _buildResumoCard(metricas, lancamentos.length),
 
-              // --- OS DOIS GRÁFICOS AQUI ---
               const SizedBox(height: 16),
-              _buildBalancoLinhasCard(graficoOrdenado), // 1º Balanço Energético
+              _buildBalancoLinhasCard(graficoOrdenado),
               const SizedBox(height: 16),
-              _buildFinanceiroCard(graficoOrdenado), // 2º Custo Evitado
-              // -----------------------------
+              _buildFinanceiroCard(graficoOrdenado),
               const SizedBox(height: 16),
               _buildFluxoCreditosSection(lancamentos),
               const SizedBox(height: 24),
@@ -329,11 +334,9 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         );
       }
     } else {
-      // SE FOR BENEFICIÁRIA (Onde acontece a divergência)
       double totalTeoricoGlobal = 0;
       double totalRealGlobal = 0;
 
-      // 1. Calcula o total real que a filha recebeu neste período auditado
       for (var lFilha in lancamentosAuditados) {
         totalRealGlobal += lFilha.energiaInjetadaKwh;
       }
@@ -345,7 +348,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
             u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
       );
 
-      // 2. Calcula o total teórico vindo das mães usando a Calculadora Oficial
       for (var mae in maes) {
         final vinculo = mae.beneficiarias.firstWhere(
           (b) => b.idUsinaFilha == usina.id,
@@ -382,12 +384,11 @@ class AuditoriaIndividualScreen extends StatelessWidget {
             totalTeoricoDestaMae,
             Colors.blue,
             numero,
-            isTeorico: true, // Adiciona um pequeno marcador visual
+            isTeorico: true,
           ),
         );
       }
 
-      // 3. SE HOUVER DIVERGÊNCIA (Retenção), MOSTRA O ALERTA LARANJA!
       if ((totalTeoricoGlobal - totalRealGlobal) > 1.0) {
         tiles.add(
           Container(
@@ -655,10 +656,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     );
   }
 
-  // ===========================================================================
-  // COMPONENTES DOS GRÁFICOS
-  // ===========================================================================
-
   Widget _buildBalancoLinhasCard(List<Map<String, dynamic>> dados) {
     return _buildBaseCard(
       titulo: usina.isGeradora ? "Balanço Energético" : "Histórico de Consumo",
@@ -693,10 +690,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               child: CustomPaint(
                 painter: _DoubleLineChartPainter(
                   dados,
-                  usina.isGeradora
-                      ? Colors.orange
-                      : Colors
-                            .transparent, // Esconde a linha laranja se não for geradora
+                  usina.isGeradora ? Colors.orange : Colors.transparent,
                   Colors.blue,
                 ),
               ),
@@ -917,7 +911,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
   }
 }
 
-// Pintor Customizado para o Gráfico de DUAS Linhas (Balanço Energético)
 class _DoubleLineChartPainter extends CustomPainter {
   final List<Map<String, dynamic>> dados;
   final Color colorGeracao;
@@ -973,7 +966,6 @@ class _DoubleLineChartPainter extends CustomPainter {
       chartBottomY,
     );
 
-    // Só desenha a linha de geração se a cor não for transparente (Usina Beneficiária)
     if (colorGeracao != Colors.transparent) {
       _drawPath(
         canvas,

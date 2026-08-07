@@ -218,6 +218,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
   void _mostrarHistoricoCompleto(
     BuildContext context,
     List<LancamentoMensal> todosLancamentos,
+    double totalDesvioGeral,
   ) {
     showModalBottomSheet(
       context: context,
@@ -282,6 +283,53 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                       lanc,
                       lancAnterior,
                     );
+
+                    // Adiciona o desvio de repasse da Mãe vs Filha para mostrar o ícone de alerta
+                    if (!widget.usina.isGeradora) {
+                      double teoricoMes = 0;
+                      final boxUsinas = Hive.box<Usina>('usinas');
+                      final boxLancamentos = Hive.box<LancamentoMensal>(
+                        'lancamentos',
+                      );
+                      final maes = boxUsinas.values.where(
+                        (u) =>
+                            u.isGeradora &&
+                            !u.isDeletado &&
+                            u.beneficiarias.any(
+                              (b) => b.idUsinaFilha == widget.usina.id,
+                            ),
+                      );
+                      for (var mae in maes) {
+                        try {
+                          final lancMae = boxLancamentos.values.firstWhere(
+                            (lm) =>
+                                lm.usinaId == mae.id &&
+                                !lm.isDeletado &&
+                                lm.dataReferencia.year ==
+                                    lanc.dataReferencia.year &&
+                                lm.dataReferencia.month ==
+                                    lanc.dataReferencia.month,
+                          );
+                          teoricoMes +=
+                              CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                                mae,
+                                lancMae,
+                                widget.usina.id,
+                              );
+                        } catch (_) {}
+                      }
+                      double realMes =
+                          (lanc.creditosRecebidosDeTerceiros != null &&
+                              lanc.creditosRecebidosDeTerceiros! > 0)
+                          ? lanc.creditosRecebidosDeTerceiros!
+                          : lanc.energiaInjetadaKwh;
+
+                      if (teoricoMes > realMes &&
+                          (teoricoMes - realMes) > 1.0) {
+                        desvio += (teoricoMes - realMes);
+                      }
+                    }
+
                     return _buildLancamentoCard(lanc, desvio);
                   },
                 ),
@@ -350,6 +398,50 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               l,
             );
             retidoConcessionaria += resumo.taxaMinimaRetida;
+          }
+
+          // RESTAURAÇÃO: Cálculo Global de Créditos Desviados para Beneficiárias
+          double totalDesvioGeral = metricas.totalCreditosDesviados;
+
+          if (!widget.usina.isGeradora) {
+            final boxUsinas = Hive.box<Usina>('usinas');
+            final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
+            final maes = boxUsinas.values.where(
+              (u) =>
+                  u.isGeradora &&
+                  !u.isDeletado &&
+                  u.beneficiarias.any((b) => b.idUsinaFilha == widget.usina.id),
+            );
+
+            for (var l in lancamentos) {
+              double teoricoMes = 0;
+              for (var mae in maes) {
+                try {
+                  final lancMae = boxLancamentos.values.firstWhere(
+                    (lm) =>
+                        lm.usinaId == mae.id &&
+                        !lm.isDeletado &&
+                        lm.dataReferencia.year == l.dataReferencia.year &&
+                        lm.dataReferencia.month == l.dataReferencia.month,
+                  );
+                  teoricoMes +=
+                      CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                        mae,
+                        lancMae,
+                        widget.usina.id,
+                      );
+                } catch (_) {}
+              }
+              double realMes =
+                  (l.creditosRecebidosDeTerceiros != null &&
+                      l.creditosRecebidosDeTerceiros! > 0)
+                  ? l.creditosRecebidosDeTerceiros!
+                  : l.energiaInjetadaKwh;
+
+              if (teoricoMes > realMes && (teoricoMes - realMes) > 1.0) {
+                totalDesvioGeral += (teoricoMes - realMes);
+              }
+            }
           }
 
           Map<String, dynamic> saudeSistema = {};
@@ -557,10 +649,14 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
+              ],
 
+              // RESTAURAÇÃO: Card de Perdas e Retenções movido para FORA do bloco isGeradora!
+              // Agora a Roberta (Beneficiária) também verá os créditos que foram desviados.
+              if (retidoConcessionaria > 0 || totalDesvioGeral > 0) ...[
                 _buildPerdasERetencoesCard(
                   retidoConcessionaria,
-                  metricas.totalCreditosDesviados,
+                  totalDesvioGeral,
                 ),
                 const SizedBox(height: 12),
               ],
@@ -603,6 +699,51 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                     lancAnterior,
                   );
 
+                  // RESTAURAÇÃO: Injeta o desvio de repasse para o ícone amarelo aparecer na lista
+                  if (!widget.usina.isGeradora) {
+                    double teoricoMes = 0;
+                    final boxUsinas = Hive.box<Usina>('usinas');
+                    final boxLancamentos = Hive.box<LancamentoMensal>(
+                      'lancamentos',
+                    );
+                    final maes = boxUsinas.values.where(
+                      (u) =>
+                          u.isGeradora &&
+                          !u.isDeletado &&
+                          u.beneficiarias.any(
+                            (b) => b.idUsinaFilha == widget.usina.id,
+                          ),
+                    );
+                    for (var mae in maes) {
+                      try {
+                        final lancMae = boxLancamentos.values.firstWhere(
+                          (lm) =>
+                              lm.usinaId == mae.id &&
+                              !lm.isDeletado &&
+                              lm.dataReferencia.year ==
+                                  lanc.dataReferencia.year &&
+                              lm.dataReferencia.month ==
+                                  lanc.dataReferencia.month,
+                        );
+                        teoricoMes +=
+                            CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                              mae,
+                              lancMae,
+                              widget.usina.id,
+                            );
+                      } catch (_) {}
+                    }
+                    double realMes =
+                        (lanc.creditosRecebidosDeTerceiros != null &&
+                            lanc.creditosRecebidosDeTerceiros! > 0)
+                        ? lanc.creditosRecebidosDeTerceiros!
+                        : lanc.energiaInjetadaKwh;
+
+                    if (teoricoMes > realMes && (teoricoMes - realMes) > 1.0) {
+                      desvio += (teoricoMes - realMes);
+                    }
+                  }
+
                   return _buildLancamentoCard(lanc, desvio);
                 }),
 
@@ -613,6 +754,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                       onPressed: () => _mostrarHistoricoCompleto(
                         context,
                         lancamentosOrdenados,
+                        totalDesvioGeral,
                       ),
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
@@ -659,7 +801,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
   void _mostrarDetalhesLancamento(
     BuildContext context,
     LancamentoMensal lancamento,
-    double desvio,
+    double desvioOriginal,
   ) {
     final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
       widget.usina,
@@ -707,7 +849,44 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
       }
     }
 
-    double creditoPratico = lancamento.energiaInjetadaKwh;
+    // --- CORREÇÃO DA TARIFA DE EXIBIÇÃO ---
+    double tarifaExibicao = lancamento.tarifaKwh;
+    if (lancamento.grupoTarifario == 'A' ||
+        lancamento.modalidadeTarifaria == 'VERDE' ||
+        lancamento.modalidadeTarifaria == 'AZUL') {
+      if ((lancamento.tarifaTeForaPonta ?? 0) > 0) {
+        tarifaExibicao =
+            lancamento.tarifaTeForaPonta! +
+            (lancamento.tarifaTusdForaPonta ?? 0);
+      }
+    } else {
+      if ((lancamento.tarifaTeUnica ?? 0) > 0) {
+        tarifaExibicao =
+            lancamento.tarifaTeUnica! + (lancamento.tarifaTusdUnica ?? 0);
+      }
+    }
+    if (tarifaExibicao <= 0) {
+      tarifaExibicao = lancamento.tarifaKwh;
+    }
+    // --------------------------------------
+
+    // RESTAURAÇÃO: Preparando a matemática do "Auditor Implacável"
+    double desvioCalculado = desvioOriginal;
+    double diferencaRepasse = 0.0;
+
+    if (!widget.usina.isGeradora && listaCreditosTeoricos.isNotEmpty) {
+      double repasseReal =
+          (lancamento.creditosRecebidosDeTerceiros != null &&
+              lancamento.creditosRecebidosDeTerceiros! > 0)
+          ? lancamento.creditosRecebidosDeTerceiros!
+          : lancamento.energiaInjetadaKwh;
+
+      diferencaRepasse = totalCreditoTeorico - repasseReal;
+
+      if (diferencaRepasse > 1.0) {
+        desvioCalculado += diferencaRepasse;
+      }
+    }
 
     showModalBottomSheet(
       context: context,
@@ -920,7 +1099,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                     MainAxisAlignment.spaceBetween,
                                 children: [
                                   const Text(
-                                    'Crédito Aplicado (Total)',
+                                    'Crédito Aplicado (Fatura)',
                                     style: TextStyle(
                                       fontWeight: FontWeight.bold,
                                       color: Colors.green,
@@ -946,88 +1125,118 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         Icons.receipt_long,
                       ),
 
-                      // NOVA LÓGICA DE EXIBIÇÃO DE ORIGEM DE CRÉDITOS
+                      // RESTAURAÇÃO: Exibição Mista de Créditos da Usina Mãe (Mostra a origem real e alerta o desvio)
                       if (!widget.usina.isGeradora) ...[
-                        if (lancamento.creditosRecebidosDeTerceiros != null &&
-                            lancamento.creditosRecebidosDeTerceiros! > 0) ...[
-                          if (lancamento.energiaInjetadaKwh > 0)
-                            _buildDetailRow(
-                              'Geração Local (Injetada)',
-                              '${_numero.format(lancamento.energiaInjetadaKwh)} kWh',
-                              isSubtle: true,
-                            ),
-                          _buildDetailRow(
-                            'Recebido de Terceiros (Usina Mãe)',
-                            '${_numero.format(lancamento.creditosRecebidosDeTerceiros!)} kWh',
-                            colorValue: Colors.blue,
-                          ),
-                          _buildDetailRow(
-                            'Crédito Total Disponível',
-                            '${_numero.format(resumo.injetadoOuRecebido)} kWh',
-                            boldValue: true,
-                            colorValue: Colors.green,
-                          ),
-                          const Divider(height: 16, indent: 20, endIndent: 20),
-                        ] else if (listaCreditosTeoricos.isNotEmpty) ...[
-                          const Padding(
-                            padding: EdgeInsets.only(bottom: 8),
-                            child: Text(
-                              'Origem dos Créditos (Estimativa Antiga):',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.grey,
-                              ),
-                            ),
-                          ),
-                          ...listaCreditosTeoricos.map(
-                            (c) => _buildDetailRow(
-                              '${c['nome']}',
-                              '${_numero.format(c['valor'])} kWh',
-                              colorValue: Colors.blueGrey,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          _buildDetailRow(
-                            'Total Teórico (Seu Direito)',
-                            '${_numero.format(totalCreditoTeorico)} kWh',
-                            boldValue: true,
-                          ),
-                          _buildDetailRow(
-                            'Crédito Aplicado (Real na Fatura)',
-                            '${_numero.format(creditoPratico)} kWh',
-                            boldValue: true,
-                            colorValue: Colors.green,
-                          ),
+                        Builder(
+                          builder: (context) {
+                            String nomesMaes = listaCreditosTeoricos
+                                .map((c) => c['nome'])
+                                .join(', ');
+                            String labelRecebidoTerceiros = nomesMaes.isNotEmpty
+                                ? 'Recebido de Terceiros ($nomesMaes)'
+                                : 'Recebido de Terceiros (Usina Mãe)';
 
-                          if ((totalCreditoTeorico - creditoPratico).abs() >
-                              0.1)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 8, bottom: 8),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.warning_amber_rounded,
-                                    color: Colors.orange,
-                                    size: 16,
+                            double repasseReal =
+                                (lancamento.creditosRecebidosDeTerceiros !=
+                                        null &&
+                                    lancamento.creditosRecebidosDeTerceiros! >
+                                        0)
+                                ? lancamento.creditosRecebidosDeTerceiros!
+                                : lancamento.energiaInjetadaKwh;
+
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (lancamento.energiaInjetadaKwh > 0 &&
+                                    lancamento.creditosRecebidosDeTerceiros !=
+                                        null &&
+                                    lancamento.creditosRecebidosDeTerceiros! >
+                                        0)
+                                  _buildDetailRow(
+                                    'Geração Local (Injetada)',
+                                    '${_numero.format(lancamento.energiaInjetadaKwh)} kWh',
+                                    isSubtle: true,
                                   ),
-                                  const SizedBox(width: 4),
-                                  Expanded(
+                                _buildDetailRow(
+                                  labelRecebidoTerceiros,
+                                  '${_numero.format(repasseReal)} kWh',
+                                  colorValue: Colors.blue,
+                                ),
+                                _buildDetailRow(
+                                  'Crédito Total Disponível',
+                                  '${_numero.format(resumo.injetadoOuRecebido)} kWh',
+                                  boldValue: true,
+                                  colorValue: Colors.green,
+                                ),
+                                const Divider(
+                                  height: 16,
+                                  indent: 20,
+                                  endIndent: 20,
+                                ),
+
+                                if (listaCreditosTeoricos.isNotEmpty &&
+                                    diferencaRepasse > 1.0) ...[
+                                  const Padding(
+                                    padding: EdgeInsets.only(bottom: 8),
                                     child: Text(
-                                      'Diferença (Perda/Retenção): ${_numero.format(totalCreditoTeorico - creditoPratico)} kWh',
+                                      'Auditoria de Repasse (Mãe vs Filha):',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Colors.orange.shade800,
                                         fontWeight: FontWeight.bold,
+                                        color: Colors.grey,
                                       ),
-                                      textAlign: TextAlign.right,
                                     ),
                                   ),
+                                  ...listaCreditosTeoricos.map(
+                                    (c) => _buildDetailRow(
+                                      'Enviado por ${c['nome']}',
+                                      '${_numero.format(c['valor'])} kWh',
+                                      colorValue: Colors.blueGrey,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _buildDetailRow(
+                                    'Total Teórico (Seu Direito)',
+                                    '${_numero.format(totalCreditoTeorico)} kWh',
+                                    boldValue: true,
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      top: 8,
+                                      bottom: 8,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.warning_amber_rounded,
+                                          color: Colors.orange,
+                                          size: 16,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Expanded(
+                                          child: Text(
+                                            'Diferença (Perda/Retenção): ${_numero.format(diferencaRepasse)} kWh',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.orange.shade800,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                            textAlign: TextAlign.right,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const Divider(
+                                    height: 16,
+                                    indent: 20,
+                                    endIndent: 20,
+                                  ),
                                 ],
-                              ),
-                            ),
-                          const Divider(height: 16, indent: 20, endIndent: 20),
-                        ],
+                              ],
+                            );
+                          },
+                        ),
                       ],
 
                       if (widget.usina.isGeradora)
@@ -1038,7 +1247,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         ),
                       _buildDetailRow(
                         !widget.usina.isGeradora
-                            ? 'Gasto da Concessionária'
+                            ? 'Da Concessionária (Rede)'
                             : 'Da Concessionária (Rede)',
                         '${_numero.format(resumo.consumidoDaRede)} kWh',
                         colorValue: Colors.red,
@@ -1055,7 +1264,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                       const SizedBox(height: 8),
                       _buildDetailRow(
                         'Tarifa Aplicada',
-                        _moeda.format(lancamento.tarifaKwh),
+                        _moeda.format(tarifaExibicao),
                       ),
                       const SizedBox(height: 12),
                       Container(
@@ -1188,7 +1397,8 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                         ),
                       ),
 
-                      if (desvio > 0) ...[
+                      // RESTAURAÇÃO: A Grande Caixa Vermelha do "Auditor Implacável"
+                      if (desvioCalculado > 0) ...[
                         const Divider(height: 30),
                         _buildSectionHeader(
                           'Auditoria de Saldo (FALHOU)',
@@ -1224,7 +1434,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                'Neste mês, você teve uma sobra de energia. Pela matemática física, o seu saldo atualizado na fatura deveria ter somado os créditos, mas a concessionária ignorou.',
+                                'Neste mês, a matemática de créditos repassados ou do saldo acumulado não bateu. Pela matemática física, o seu saldo atualizado na fatura deveria ter somado os créditos, mas a concessionária ignorou.',
                                 style: TextStyle(
                                   color: Colors.red.shade800,
                                   fontSize: 12,
@@ -1233,7 +1443,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                               const SizedBox(height: 12),
                               _buildDetailRow(
                                 'Desvio Detectado:',
-                                '${_numero.format(desvio)} kWh',
+                                '${_numero.format(desvioCalculado)} kWh',
                                 boldValue: true,
                                 colorValue: Colors.red.shade900,
                               ),
@@ -1760,7 +1970,6 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     ),
   );
 
-  // NOVO WIDGET UNIFICADO (Retido e Desviado)
   Widget _buildPerdasERetencoesCard(double retido, double desviado) {
     if (retido == 0 && desviado == 0) return const SizedBox.shrink();
 

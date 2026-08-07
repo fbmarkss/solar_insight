@@ -162,28 +162,52 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
                 },
               );
 
-              double energiaEfetivamentePoupada = 0;
+              // =================================================================
+              // CORREÇÃO 1: TARIFA INTELIGENTE
+              // Identifica se tem Tarifa TE + TUSD da IA, senão usa manual.
+              // =================================================================
+              double tarifaReal = l.tarifaKwh;
+              if (l.grupoTarifario == 'A' ||
+                  l.modalidadeTarifaria == 'VERDE' ||
+                  l.modalidadeTarifaria == 'AZUL') {
+                if ((l.tarifaTeForaPonta ?? 0) > 0) {
+                  tarifaReal =
+                      l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
+                }
+              } else {
+                if ((l.tarifaTeUnica ?? 0) > 0) {
+                  tarifaReal = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
+                }
+              }
+              if (tarifaReal <= 0) {
+                tarifaReal = l.tarifaKwh;
+              }
+
+              // =================================================================
+              // CORREÇÃO 2: DADOS REAIS DO FORMULÁRIO PARA CÁLCULO DE ECONOMIA
+              // =================================================================
+              double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
+                  .clamp(0.0, double.infinity);
+              double creditosTotaisDisponiveis =
+                  l.energiaInjetadaKwh +
+                  (l.creditosRecebidosDeTerceiros ?? 0.0);
+
+              double energiaCompensada = creditosTotaisDisponiveis.clamp(
+                0.0,
+                l.energiaConsumidaRedeKwh,
+              );
+
+              double energiaEfetivamentePoupada =
+                  autoconsumo + energiaCompensada;
 
               if (usina.isGeradora) {
                 totalGeralGerado += resumo.geracaoTotal;
                 dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
-
-                double energiaCompensada = l.energiaInjetadaKwh.clamp(
-                  0.0,
-                  l.energiaConsumidaRedeKwh,
-                );
-                energiaEfetivamentePoupada =
-                    resumo.autoconsumo + energiaCompensada;
-              } else {
-                double energiaCompensada = resumo.injetadoOuRecebido.clamp(
-                  0.0,
-                  l.energiaConsumidaRedeKwh,
-                );
-                energiaEfetivamentePoupada = energiaCompensada;
               }
 
+              // Economia agora é calculada usando a tarifa real extraída
               double economiaFinanceira =
-                  energiaEfetivamentePoupada * l.tarifaKwh;
+                  energiaEfetivamentePoupada * tarifaReal;
               double custoProjetado = l.valorFaturaR + economiaFinanceira;
 
               totalGeralConsumido += resumo.consumoRealLocal;
@@ -603,7 +627,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // AQUI: A cor da legenda alterada para um azul suave que contrasta com o verde
               _buildLegendItem("Sem Solar (Projetado)", Colors.blue.shade300),
               const SizedBox(width: 16),
               _buildLegendItem("Com Solar (Real)", Colors.green),
@@ -856,7 +879,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
               NumberFormat.compact().format(vFundo),
               style: TextStyle(
                 fontSize: 8,
-                // AQUI: Cor do texto "Projetado" alterada para azul
                 color: Colors.blue.shade400,
                 fontWeight: FontWeight.bold,
               ),
@@ -884,7 +906,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
                 width: 18,
                 height: hFundo,
                 decoration: BoxDecoration(
-                  // AQUI: A cor da barra alterada para um azul claro e suave
                   color: Colors.blue.shade100,
                   borderRadius: BorderRadius.circular(4),
                 ),
