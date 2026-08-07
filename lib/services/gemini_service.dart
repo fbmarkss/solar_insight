@@ -50,23 +50,23 @@ REGRAS RÍGIDAS DE EXTRAÇÃO:
 
 1. CLASSIFICAÇÃO DA USINA E CONCESSIONÁRIA:
 - Identifique a concessionária (EDP ou Santa Maria).
-- Identifique o Grupo Tarifário. ATENÇÃO: Contas com Tensão Nominal igual ou superior a 13.800V ou 13.8kV, ou que possuam as palavras "Subgrupo A4" ou "Grupo A", SÃO OBRIGATORIAMENTE GRUPO A. Todo o resto é Grupo B.
+- Identifique o Grupo Tarifario. ATENÇÃO: Contas com Tensão Nominal igual ou superior a 13.800V ou 13.8kV, ou que possuam as palavras "Subgrupo A4" ou "Grupo A", SÃO OBRIGATORIAMENTE GRUPO A. Todo o resto é Grupo B.
 
 2. CONSUMO REAL (kWh):
-- 🚨 NUNCA utilize valores das seções de "Medidor" ou "Detalhes de Leitura" onde houver avisos de "Perdas de Transformação" (ex: 2.5%).
-- Se SANTA MARIA: Vá OBRIGATORIAMENTE no quadro "GRANDEZAS MEDIDAS". Olhe apenas a coluna "VALOR MEDIDO". Some EXCLUSIVAMENTE os valores numéricos das linhas que começam com "Energia ativa consumo" e "Energia ativa consumo horário reservado". Lance a soma em "unico". É PROIBIDO ler o "Histórico de Faturamento".
+- 🚨 NUNCA utilize valores das seções de "Medidor", "Número do Medidor" ou "Detalhes de Leitura" onde houver avisos de "Perdas de Transformação" (ex: 2.5%). Fique atento para nunca confundir o número de série do medidor (ex: 1586662) com valores de consumo.
+- 🚨 Se SANTA MARIA: Vá OBRIGATORIAMENTE no quadro "GRANDEZAS MEDIDAS". Olhe apenas e exclusivamente a coluna "VALOR MEDIDO". Nunca pegue os valores das colunas "LEITURA ATUAL" ou "LEITURA ANTERIOR". Some EXCLUSIVAMENTE os valores numéricos das linhas que começam com "Energia ativa consumo" e "Energia ativa consumo horário reservado" (ou equivalente de consumo). Lance a soma em "unico". É PROIBIDO ler o "Histórico de Faturamento".
 - Se EDP GRUPO A: Busque EXCLUSIVAMENTE no quadro "DETALHES DE FATURAMENTO". Extraia a quantidade (kWh) das linhas "Energia Ativa Fornecida Ponta", "Energia Ativa Fornecida Fora Ponta" e "Energia Ativa Fornecida Reservado".
 - Se EDP GRUPO B: Busque no quadro "Detalhes do faturamento". Some as quantidades de todas as linhas que contenham "Energia Ativa Fornecida" e lance em "unico".
 
 3. ENERGIA INJETADA (kWh) - A REGRA DE OURO:
 - 🚨 PROIBIDO: NUNCA pegue valores das linhas de faturamento com palavras como "Inj. mUC", "Consumo SCEE" ou valores negativos (-). Isso é compensação financeira, não injeção física.
-- Se SANTA MARIA: Procure EXCLUSIVAMENTE no quadro "GRANDEZAS MEDIDAS" na coluna "VALOR MEDIDO". A injeção é o valor da linha "Energia ativa injetada".
+- Se SANTA MARIA: Procure EXCLUSIVAMENTE no quadro "GRANDEZAS MEDIDAS" na coluna "VALOR MEDIDO". A injeção física é o "VALOR MEDIDO" da linha "Energia ativa injetada". Nunca utilize a "LEITURA ATUAL" desta linha.
 - Se EDP GRUPO B: Procure EXCLUSIVAMENTE no quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA" a linha "Energia Injetada no mês".
 - Se EDP GRUPO A: Procure no quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA". Extraia "Energia Injetada Ponta", "Energia Injetada Fora Ponta" e "Energia Injetada Reservado". Se não houver separação, coloque o valor total em "unico".
 
 4. TARIFAS E VALORES (R$ e R$/kWh):
 - Tarifas EDP GRUPO A: Busque no quadro "DETALHES DE FATURAMENTO" as linhas escritas EXATAMENTE "Tarifa ANEEL TUSD/TE Ponta" e "Tarifa ANEEL TUSD/TE FPonta".
-- Tarifas GRUPO B (Santa Maria): No quadro "ITENS DA FATURA", pegue o "PREÇO UNIT.(R$)" da linha "Consumo" ou "Consumo SCEE" (o maior preço). Lance em 'teUnica' e 0.0 em 'tusdUnica'.
+- Tarifas GRUPO B (Santa Maria): No quadro "ITENS DA FATURA", busque OBRIGATORIAMENTE na coluna "TARIFA UNIT. (R$)". Pegue o preço unitário da linha "Consumo" ou "Consumo SCEE" (o maior preço unitário). Lance em 'teUnica' e 0.0 em 'tusdUnica'. Nunca invente valores de tarifa que não estejam impressos nessa coluna.
 - Tarifas GRUPO B (EDP): No quadro "Detalhes do faturamento", extraia o preço unitário da linha "TE - Energia Ativa Fornecida" (para 'teUnica') e da linha "TUSD - Energia Ativa Fornecida" (para 'tusdUnica').
 - Custos Adicionais e Multas: 
   * Se EDP GRUPO A: É EXPRESSAMENTE PROIBIDO extrair Demanda e Multas do quadro final "DETALHES DE FATURAMENTO". Você DEVE ir ao quadro das primeiras páginas que possui a coluna "Valor Total R$" (que já embute os tributos). Extraia os valores de "Demanda", "Demanda Geração", "ERE..." e "DRE..." EXCLUSIVAMENTE dessa coluna.
@@ -80,7 +80,7 @@ REGRAS RÍGIDAS DE EXTRAÇÃO:
 
 FORMATO DE SAÍDA OBRIGATÓRIO (NÃO USE MARKDOWN ```json, APENAS O TEXTO PURO):
 {
-  "debugLog": "Escreva detalhadamente de qual quadro extraiu os Saldos Anterior e Atual e quais foram os valores encontrados.",
+  "debugLog": "Escreva detalhadamente de qual quadro extraiu os Saldos Anterior e Atual, quais tarifas unitárias encontrou e quais foram os valores numéricos exatos.",
   "dadosGerais": {
     "mesReferencia": "MM/YYYY",
     "grupoTarifario": "A",

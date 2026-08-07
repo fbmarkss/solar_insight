@@ -686,6 +686,50 @@ class CalculadoraEnergetica {
       });
     }
 
+    // --- NOVO ALERTA: DESVIO NO REPASSE MÃE VS FILHA ---
+    if (!usina.isGeradora) {
+      double recebidoReal =
+          (ultimo.creditosRecebidosDeTerceiros != null &&
+              ultimo.creditosRecebidosDeTerceiros! > 0)
+          ? ultimo.creditosRecebidosDeTerceiros!
+          : ultimo.energiaInjetadaKwh;
+
+      double totalTeorico = 0;
+      final boxUsinas = Hive.box<Usina>('usinas');
+      final maes = boxUsinas.values.where((u) => u.isGeradora && !u.isDeletado);
+
+      for (var mae in maes) {
+        try {
+          // Busca nos lançamentos globais, não no historico filtrado da beneficiária
+          var lancMae = boxLanc.values.firstWhere(
+            (l) =>
+                l.usinaId == mae.id &&
+                l.dataReferencia.year == ultimo.dataReferencia.year &&
+                l.dataReferencia.month == ultimo.dataReferencia.month &&
+                !l.isDeletado,
+          );
+          totalTeorico += obterCreditoRepassadoParaFilha(
+            mae,
+            lancMae,
+            usina.id,
+          );
+        } catch (_) {}
+      }
+
+      double diferencaRepasse = totalTeorico - recebidoReal;
+
+      if (diferencaRepasse > 1.0) {
+        alertas.add({
+          'tipo': 'fraude_repasse',
+          'titulo': 'Desvio de Repasse Detectado!',
+          'mensagem':
+              'A usina mãe enviou ${totalTeorico.toStringAsFixed(1)} kWh, mas a concessionária só creditou ${recebidoReal.toStringAsFixed(1)} kWh na unidade ${usina.nome}. Ocorreu uma retenção indevida na transferência.',
+          'cor': 'red',
+          'icone': 'compare_arrows',
+        });
+      }
+    }
+
     return alertas;
   }
 

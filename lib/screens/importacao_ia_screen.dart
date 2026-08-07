@@ -1,5 +1,5 @@
 // Caminho: lib/screens/importacao_ia_screen.dart
-// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO) - Integrada com Gemini e Bloqueio Visual Dinâmico.
+// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO) - Integrada com Gemini e Painel de Análise Clean.
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -24,6 +24,10 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
 
   // Variável que controla a tela: null = carregando, true = PRO, false = Bloqueado
   bool? _isUsuarioPro;
+
+  // --- VARIÁVEIS PARA O PAINEL DE ANÁLISE (DEBUG) ---
+  bool _mostrarDebug = false;
+  Map<String, dynamic>? _dadosProcessados;
 
   final List<String> _loadingMessages = [
     'Enviando PDF seguro para nuvem...',
@@ -52,13 +56,11 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
             .get();
         final data = doc.data();
 
-        // --- AQUI FOI CORRIGIDO O "VAZAMENTO VIP" ---
-        // Ser Admin não dá direito ao plano PRO de graça. Apenas assinantes passam.
         bool isPro = data?['plano'] == 'pro' || data?['isPro'] == true;
 
         if (mounted) {
           setState(() {
-            _isUsuarioPro = isPro; // Estritamente validado pelo plano
+            _isUsuarioPro = isPro;
           });
         }
       } catch (e) {
@@ -71,7 +73,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
   }
 
   Future<void> _selecionarEAnalisarPdf() async {
-    // Como a tela já validou o acesso no initState, não precisamos de travas aqui
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf'],
@@ -83,6 +84,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
 
       setState(() {
         _isAnalyzing = true;
+        _mostrarDebug = false;
         _statusMessage = _loadingMessages[0];
       });
 
@@ -92,32 +94,26 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
 
       try {
         if (file.bytes != null) {
-          // Tenta ler o PDF. Se falhar, pula direto para o 'catch' abaixo!
           final dadosExtraidos = await geminiService.analisarFaturaPdf(
             file.bytes!,
           );
 
           if (!mounted) return;
 
-          // Se chegou aqui, é porque deu sucesso absoluto!
           if (dadosExtraidos != null) {
-            _mostrarSucesso('Fatura lida com sucesso! Redirecionando...');
+            _mostrarSucesso('Fatura lida com sucesso!');
 
-            Future.delayed(const Duration(seconds: 2), () {
-              if (mounted) {
-                Navigator.pop(context, dadosExtraidos);
-              }
+            setState(() {
+              _dadosProcessados = dadosExtraidos;
+              _mostrarDebug = true; // Exibe o painel clean de revisão
             });
           }
         }
       } catch (e) {
-        // Apanha o bloqueio do Google Cloud (ou qualquer outro erro) e mostra na tela!
         if (mounted) {
           _mostrarErro(e.toString().replaceAll('Exception: ', ''));
         }
       } finally {
-        // O FINALLY é o nosso seguro de vida. Aconteça o que acontecer (erro ou sucesso),
-        // ele vai sempre desligar a animação e libertar a tela.
         if (mounted) {
           setState(() {
             _isAnalyzing = false;
@@ -125,7 +121,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
         }
       }
     } else {
-      // Se o usuário cancelou a escolha do ficheiro
       setState(() {
         _isAnalyzing = false;
         _statusMessage = 'Aguardando documento...';
@@ -237,7 +232,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
               ),
               const SizedBox(height: 40),
 
-              // --- ÁREA DINÂMICA (CARREGANDO / BLOQUEADA / LIBERADA) ---
+              // --- ÁREA DINÂMICA (CARREGANDO / BLOQUEADA / REVISÃO / UPLOAD) ---
               _buildDynamicArea(),
             ],
           ),
@@ -248,7 +243,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
 
   Widget _buildDynamicArea() {
     if (_isUsuarioPro == null) {
-      // Estado 1: Carregando
+      // Estado 1: Carregando plano
       return const SizedBox(
         height: 250,
         child: Center(
@@ -298,7 +293,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
               height: 50,
               child: ElevatedButton(
                 onPressed: () {
-                  // --- ROTEAMENTO DIRETO PARA O PAYWALL ---
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -308,7 +302,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
                       ),
                     ),
                   ).then((_) {
-                    // Quando ele fechar o Paywall, recarregamos a tela para ver se ele comprou
                     _verificarPlanoUsuario();
                   });
                 },
@@ -334,6 +327,13 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
       );
     } else {
       // Estado 3: Liberado (PRO)
+
+      // Se a IA já processou, mostra o Painel de Revisão Clean
+      if (_mostrarDebug && _dadosProcessados != null) {
+        return _buildPainelAnaliseConcluida();
+      }
+
+      // Senão, mostra o botão tradicional de Upload Animado
       return GestureDetector(
         onTap: _isAnalyzing ? null : _selecionarEAnalisarPdf,
         child: AnimatedContainer(
@@ -413,5 +413,145 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
         ),
       );
     }
+  }
+
+  // --- NOVA INTERFACE: PAINEL DE ANÁLISE CLEAN ---
+  Widget _buildPainelAnaliseConcluida() {
+    String debugText =
+        _dadosProcessados!['debugLog'] ??
+        'Log de raciocínio não encontrado ou vazio.';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.blue.shade100, width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.blue.withValues(alpha: 0.05),
+                blurRadius: 20,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.psychology,
+                      color: Colors.blue.shade700,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Análise Concluída',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        Text(
+                          'Veja como a IA interpretou os dados',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Divider(height: 1),
+              ),
+              Container(
+                height: 220,
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade50,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.grey.shade200),
+                ),
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    child: Text(
+                      debugText,
+                      style: TextStyle(
+                        color: Colors.blueGrey.shade800,
+                        fontSize: 13,
+                        height: 1.5, // Linhas mais espaçadas para leitura fácil
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        SizedBox(
+          height: 55,
+          child: ElevatedButton.icon(
+            onPressed: () {
+              // Entrega a encomenda final de volta para o formulário
+              Navigator.pop(context, _dadosProcessados);
+            },
+            icon: const Icon(Icons.check_circle_outline),
+            label: const Text(
+              'PREENCHER FORMULÁRIO',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 15,
+                letterSpacing: 1.0,
+              ),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.deepOrange,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              elevation: 0,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Center(
+          child: TextButton(
+            onPressed: () {
+              // Permite ao usuário cancelar e enviar outro PDF
+              setState(() {
+                _mostrarDebug = false;
+                _dadosProcessados = null;
+                _statusMessage = 'Aguardando documento...';
+              });
+            },
+            child: const Text(
+              'Importar arquivo diferente',
+              style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

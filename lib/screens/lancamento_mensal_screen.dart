@@ -491,7 +491,10 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       l.creditosRecebidosDeTerceiros = creditosTerceirosTratado;
 
       l.energiaConsumidaRedeKwh = _converterParaDouble(_consumoController.text);
-      l.tarifaKwh = tarifa;
+
+      // 👇 CORREÇÃO AQUI (Garante que a tarifa base receba a soma da IA)
+      l.tarifaKwh = _temDadosAvancados ? (_teUnica + _tusdUnica) : tarifa;
+
       l.valorFaturaR = _converterParaDouble(_valorFaturaController.text);
 
       if (!_temDadosAvancados) {
@@ -541,7 +544,10 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         energiaInjetadaKwh: injetadaTratada,
         creditosRecebidosDeTerceiros: creditosTerceirosTratado,
         energiaConsumidaRedeKwh: _converterParaDouble(_consumoController.text),
-        tarifaKwh: tarifa,
+
+        // 👇 CORREÇÃO AQUI (Garante que a tarifa base receba a soma da IA)
+        tarifaKwh: _temDadosAvancados ? (_teUnica + _tusdUnica) : tarifa,
+
         valorFaturaR: _converterParaDouble(_valorFaturaController.text),
         custoDemandaR: _temDadosAvancados
             ? _demandaIA
