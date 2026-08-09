@@ -3,7 +3,7 @@
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+//import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:hive_flutter/hive_flutter.dart';
@@ -109,7 +109,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     return text;
   }
 
-  // --- INTEGRAÇÃO HG BRASIL (CACHE INTELIGENTE E FALLBACK PARA IP) ---
+  // --- INTEGRAÇÃO OPEN-METEO (FALLBACK PARA IP) ---
   Future<void> _buscarClimaReal({String? cidade}) async {
     if (mounted) {
       setState(() {
@@ -122,80 +122,121 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     // Se o usuário enviou uma cidade pelo BottomSheet
     if (cidade != null) {
       if (cidade.trim().isEmpty) {
-        // Se enviou vazio, significa que ele quer limpar e voltar pro IP
         box.delete('cidade_clima');
       } else {
-        // Salva a nova cidade no cache
         box.put('cidade_clima', cidade);
       }
     }
 
-    // Tenta ler do cache
     String? cidadeSalva = box.get('cidade_clima');
-    // chave hg brasil chave
-    String urlOriginal =
-        'https://api.hgbrasil.com/weather?format=json-cors&key=736c0c42';
-
-    if (cidadeSalva != null && cidadeSalva.isNotEmpty) {
-      // Usa a cidade salva no cache
-      String cidadeFormatada = cidadeSalva.replaceAll(' - ', ', ');
-      urlOriginal += '&city_name=${Uri.encodeComponent(cidadeFormatada)}';
-    } else {
-      // Usuário novo ou cache limpo: usa o IP
-      urlOriginal += '&user_ip=remote';
-    }
+    double? lat;
+    double? lon;
+    String nomeLocal = "Local desconhecido";
 
     try {
-      final response = await http.get(Uri.parse(urlOriginal));
-      if (response.statusCode == 200) {
-        _processarRespostaClima(response.body);
-      } else {
-        throw Exception("Status code não foi 200");
-      }
-    } catch (e) {
-      if (kIsWeb) {
-        try {
-          final proxyUrl = Uri.parse(
-            'https://api.allorigins.win/raw?url=${Uri.encodeComponent(urlOriginal)}',
-          );
-          final responseProxy = await http.get(proxyUrl);
-          if (responseProxy.statusCode == 200) {
-            _processarRespostaClima(responseProxy.body);
-          } else {
-            _definirClimaIndisponivel();
+      // 1. Busca coordenadas pela cidade selecionada (Geocoding API)
+      if (cidadeSalva != null && cidadeSalva.isNotEmpty) {
+        String nomePesquisa = cidadeSalva.split('-')[0].trim();
+        final geoUrl = Uri.parse(
+          'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(nomePesquisa)}&count=1&language=pt',
+        );
+        final geoRes = await http.get(geoUrl);
+
+        if (geoRes.statusCode == 200) {
+          final geoData = json.decode(geoRes.body);
+          if (geoData['results'] != null && geoData['results'].isNotEmpty) {
+            lat = geoData['results'][0]['latitude'];
+            lon = geoData['results'][0]['longitude'];
+            nomeLocal = cidadeSalva; // Mantém o formato "Cidade - UF"
           }
-        } catch (e2) {
+        }
+      }
+
+      // 2. Se não houver cidade salva ou falhou, tenta descobrir por IP
+      if (lat == null || lon == null) {
+        final ipUrl = Uri.parse('https://ipapi.co/json/');
+        final ipRes = await http.get(ipUrl);
+        if (ipRes.statusCode == 200) {
+          final ipData = json.decode(ipRes.body);
+          lat = ipData['latitude'];
+          lon = ipData['longitude'];
+          nomeLocal =
+              '${ipData['city']} - ${ipData['region_code'] ?? ipData['region']}';
+        }
+      }
+
+      // 3. Busca o Clima no Open-Meteo
+      if (lat != null && lon != null) {
+        final climaUrl = Uri.parse(
+          'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,is_day,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=auto',
+        );
+
+        final climaRes = await http.get(climaUrl);
+        if (climaRes.statusCode == 200) {
+          _processarRespostaOpenMeteo(climaRes.body, nomeLocal);
+        } else {
           _definirClimaIndisponivel();
         }
       } else {
         _definirClimaIndisponivel();
       }
+    } catch (e) {
+      debugPrint('Erro ao buscar clima: $e');
+      _definirClimaIndisponivel();
     }
   }
 
-  void _processarRespostaClima(String responseBody) {
+  void _processarRespostaOpenMeteo(String responseBody, String nomeLocal) {
     try {
       final data = json.decode(responseBody);
-      final results = data['results'];
+      final current = data['current'];
+      final daily = data['daily'];
 
-      // Pega a previsão do dia seguinte (índice 1 no array forecast)
+      int weatherCode = current['weather_code'] ?? 0;
+      int isDay = current['is_day'] ?? 1;
+
+      final infoClima = _traduzirWmo(weatherCode, isDay == 1);
+
+      // Pega a previsão do dia seguinte (índice 1 no array daily)
       String previsaoAmanha = '';
-      if (results['forecast'] != null && results['forecast'].length > 1) {
-        final amanha = results['forecast'][1];
+      if (daily != null &&
+          daily['temperature_2m_max'] != null &&
+          daily['temperature_2m_max'].length > 1) {
+        String tempMax = daily['temperature_2m_max'][1].round().toString();
+        String tempMin = daily['temperature_2m_min'][1].round().toString();
+        int weatherCodeAmanha = daily['weather_code'][1];
+        final infoAmanha = _traduzirWmo(weatherCodeAmanha, true);
+
         previsaoAmanha =
-            'Amanhã: ${amanha['max']}° / ${amanha['min']}° (${amanha['description']})';
+            'Amanhã: $tempMax° / $tempMin° (${infoAmanha['condicao']})';
+      }
+
+      // Formatando o Nascer e o Pôr do Sol
+      String sol = '--';
+      if (daily != null &&
+          daily['sunrise'] != null &&
+          daily['sunrise'].length > 0) {
+        String sunriseStr = daily['sunrise'][0];
+        String sunsetStr = daily['sunset'][0];
+        String nascer = sunriseStr.length >= 16
+            ? sunriseStr.substring(11, 16)
+            : '--';
+        String por = sunsetStr.length >= 16
+            ? sunsetStr.substring(11, 16)
+            : '--';
+        sol = '$nascer às $por';
       }
 
       if (mounted) {
         setState(() {
           _climaData = {
-            'condicao': results['description'],
-            'temperatura': results['temp'],
-            'icone': _obterIconeHg(results['condition_slug']),
-            'cor': _obterCorHg(results['condition_slug']),
-            'cidade': results['city'],
-            'umidade': '${results['humidity']}%',
-            'sol': '${results['sunrise']} às ${results['sunset']}',
+            'condicao': infoClima['condicao'],
+            'temperatura': current['temperature_2m'].round().toString(),
+            'icone': infoClima['icone'],
+            'cor': infoClima['cor'],
+            'cidade': nomeLocal,
+            'umidade': '${current['relative_humidity_2m'].round()}%',
+            'sol': sol,
             'previsao_amanha': previsaoAmanha,
           };
         });
@@ -203,6 +244,57 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     } catch (_) {
       _definirClimaIndisponivel();
     }
+  }
+
+  // Tradutor Oficial dos Códigos da Organização Meteorológica Mundial (WMO)
+  Map<String, dynamic> _traduzirWmo(int code, bool isDay) {
+    String condicao = "Desconhecido";
+    IconData icone = Icons.cloud_outlined;
+    Color cor = Colors.blueGrey;
+
+    if (code == 0) {
+      condicao = "Céu Limpo";
+      icone = isDay ? Icons.wb_sunny_rounded : Icons.nightlight_round;
+      cor = isDay ? Colors.orange : Colors.blueGrey;
+    } else if (code == 1 || code == 2 || code == 3) {
+      condicao = code == 1
+          ? "Principalmente Limpo"
+          : code == 2
+          ? "Parcialmente Nublado"
+          : "Nublado";
+      icone = code == 3
+          ? Icons.cloud_rounded
+          : (isDay ? Icons.wb_cloudy_rounded : Icons.nightlight_round);
+      cor = code == 3
+          ? Colors.grey
+          : (isDay ? Colors.orangeAccent : Colors.blueGrey);
+    } else if (code == 45 || code == 48) {
+      condicao = "Nevoeiro";
+      icone = Icons.foggy;
+      cor = Colors.grey;
+    } else if (code >= 51 && code <= 55) {
+      condicao = "Chuvisco";
+      icone = Icons.grain;
+      cor = Colors.lightBlue;
+    } else if (code >= 61 && code <= 67) {
+      condicao = "Chuva";
+      icone = Icons.water_drop_rounded;
+      cor = Colors.blue;
+    } else if (code >= 71 && code <= 77) {
+      condicao = "Neve";
+      icone = Icons.ac_unit_rounded;
+      cor = Colors.lightBlueAccent;
+    } else if (code >= 80 && code <= 82) {
+      condicao = "Pancadas de Chuva";
+      icone = Icons.water_drop_rounded;
+      cor = Colors.blueAccent;
+    } else if (code >= 95 && code <= 99) {
+      condicao = "Tempestade";
+      icone = Icons.thunderstorm_rounded;
+      cor = Colors.deepPurple;
+    }
+
+    return {'condicao': condicao, 'icone': icone, 'cor': cor};
   }
 
   void _definirClimaIndisponivel() {
@@ -431,33 +523,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         );
       },
     );
-  }
-
-  IconData _obterIconeHg(String slug) {
-    switch (slug) {
-      case 'clear_day':
-        return Icons.wb_sunny_rounded;
-      case 'clear_night':
-        return Icons.nightlight_round;
-      case 'cloud':
-      case 'cloudly_day':
-      case 'cloudly_night':
-        return Icons.cloud_rounded;
-      case 'rain':
-        return Icons.water_drop_rounded;
-      case 'storm':
-        return Icons.thunderstorm_rounded;
-      case 'snow':
-        return Icons.ac_unit_rounded;
-      default:
-        return Icons.cloud_outlined;
-    }
-  }
-
-  Color _obterCorHg(String slug) {
-    if (slug.contains('clear')) return Colors.orange;
-    if (slug.contains('rain') || slug.contains('storm')) return Colors.blue;
-    return Colors.blueGrey;
   }
 
   // --- LÓGICA DE PULL-TO-REFRESH ---
@@ -1087,8 +1152,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                     Flexible(
                       child: Text(
                         _climaData['previsao_amanha'],
-                        textAlign: TextAlign
-                            .center, // Centraliza o texto se quebrar para a 2ª linha
+                        textAlign:
+                            TextAlign.center, // Centraliza o texto se quebrar
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.grey.shade700,
@@ -1236,7 +1301,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       corFundoIcone = Colors.green.shade50;
     } else if (alerta['cor'] == 'red' ||
         alerta['tipo'] == 'creditos_desviados' ||
-        alerta['tipo'] == 'deficit_real') {
+        alerta['tipo'] == 'deficit_real' ||
+        alerta['tipo'] == 'fraude_repasse') {
       cor = Colors.red.shade600;
       corFundoIcone = Colors.red.shade50;
     } else {
@@ -1314,6 +1380,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         return Icons.monetization_on_outlined;
       case 'creditos_desviados':
         return Icons.policy_outlined;
+      case 'fraude_repasse':
+        return Icons.compare_arrows_rounded;
       case 'otimizacao_rateio':
         return Icons.lightbulb_outline_rounded;
       case 'fuga_dinheiro':
@@ -1559,9 +1627,18 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Balanço',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Balanço do Mês',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  Text(
+                    dash.nomeMesReferencia, // Aqui a mágica acontece (Ex: "JULHO 2026")
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ],
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

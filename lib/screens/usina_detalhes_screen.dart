@@ -1453,12 +1453,24 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                                 ],
                               ),
                               const SizedBox(height: 12),
-                              Text(
-                                'A usina mãe repassou os créditos, mas a concessionária creditou um valor inferior na fatura da unidade ${widget.usina.nome}. Ocorreu um sumiço no trânsito dos créditos entre as unidades.',
-                                style: TextStyle(
-                                  color: Colors.red.shade800,
-                                  fontSize: 12,
-                                ),
+                              // 👇 USANDO A LISTA DE MÃES PARA MOSTRAR OS NOMES
+                              Builder(
+                                builder: (context) {
+                                  String nomesMaes = listaCreditosTeoricos
+                                      .map((c) => c['nome'])
+                                      .join(', ');
+                                  String textoOrigem = nomesMaes.isNotEmpty
+                                      ? 'A usina mãe ($nomesMaes)'
+                                      : 'A usina mãe';
+
+                                  return Text(
+                                    '$textoOrigem repassou os créditos, mas a concessionária creditou um valor inferior na fatura da unidade ${widget.usina.nome}. Ocorreu um sumiço no trânsito dos créditos entre as unidades.',
+                                    style: TextStyle(
+                                      color: Colors.red.shade800,
+                                      fontSize: 12,
+                                    ),
+                                  );
+                                },
                               ),
                               const SizedBox(height: 12),
                               _buildDetailRow(

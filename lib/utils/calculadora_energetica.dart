@@ -695,12 +695,13 @@ class CalculadoraEnergetica {
           : ultimo.energiaInjetadaKwh;
 
       double totalTeorico = 0;
+      List<String> nomesDasMaes = []; // Guarda quem mandou a energia
+
       final boxUsinas = Hive.box<Usina>('usinas');
       final maes = boxUsinas.values.where((u) => u.isGeradora && !u.isDeletado);
 
       for (var mae in maes) {
         try {
-          // Busca nos lançamentos globais, não no historico filtrado da beneficiária
           var lancMae = boxLanc.values.firstWhere(
             (l) =>
                 l.usinaId == mae.id &&
@@ -708,22 +709,35 @@ class CalculadoraEnergetica {
                 l.dataReferencia.month == ultimo.dataReferencia.month &&
                 !l.isDeletado,
           );
-          totalTeorico += obterCreditoRepassadoParaFilha(
+
+          double enviadoPorEstaMae = obterCreditoRepassadoParaFilha(
             mae,
             lancMae,
             usina.id,
           );
+
+          if (enviadoPorEstaMae > 0) {
+            totalTeorico += enviadoPorEstaMae;
+            if (!nomesDasMaes.contains(mae.nome)) {
+              nomesDasMaes.add(mae.nome);
+            }
+          }
         } catch (_) {}
       }
 
       double diferencaRepasse = totalTeorico - recebidoReal;
 
       if (diferencaRepasse > 1.0) {
+        // Formata os nomes (Ex: "Fábrica" ou "Fábrica, Galpão")
+        String textoMaes = nomesDasMaes.isNotEmpty
+            ? nomesDasMaes.join(', ')
+            : 'usina mãe';
+
         alertas.add({
           'tipo': 'fraude_repasse',
           'titulo': 'Desvio de Repasse Detectado!',
           'mensagem':
-              'A usina mãe enviou ${totalTeorico.toStringAsFixed(1)} kWh, mas a concessionária só creditou ${recebidoReal.toStringAsFixed(1)} kWh na unidade ${usina.nome}. Ocorreu uma retenção indevida na transferência.',
+              'A usina mãe ($textoMaes) enviou ${totalTeorico.toStringAsFixed(1)} kWh, mas a concessionária só creditou ${recebidoReal.toStringAsFixed(1)} kWh na unidade ${usina.nome}. Ocorreu uma retenção indevida na transferência.',
           'cor': 'red',
           'icone': 'compare_arrows',
         });
