@@ -111,11 +111,11 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
 
   // --- INTEGRAÇÃO OPEN-METEO (FALLBACK PARA IP) ---
   Future<void> _buscarClimaReal({String? cidade}) async {
-    if (mounted) {
-      setState(() {
-        _climaData['condicao'] = 'Buscando...';
-      });
-    }
+    if (!mounted) return;
+    setState(() {
+      _climaData['condicao'] = 'Buscando...';
+      _climaData['temperatura'] = '--'; // Reseta visualmente
+    });
 
     final box = Hive.box('sync_metadata');
 
@@ -133,6 +133,10 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     double? lon;
     String nomeLocal = "Local desconhecido";
 
+    // Limite de tempo e identificação para evitar bloqueios no mobile
+    const timeoutDur = Duration(seconds: 8);
+    final headers = {'User-Agent': 'SolarInsightApp/1.0'};
+
     try {
       // 1. Busca coordenadas pela cidade selecionada (Geocoding API)
       if (cidadeSalva != null && cidadeSalva.isNotEmpty) {
@@ -140,7 +144,9 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         final geoUrl = Uri.parse(
           'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(nomePesquisa)}&count=1&language=pt',
         );
-        final geoRes = await http.get(geoUrl);
+        final geoRes = await http
+            .get(geoUrl, headers: headers)
+            .timeout(timeoutDur);
 
         if (geoRes.statusCode == 200) {
           final geoData = json.decode(geoRes.body);
@@ -155,13 +161,18 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       // 2. Se não houver cidade salva ou falhou, tenta descobrir por IP
       if (lat == null || lon == null) {
         final ipUrl = Uri.parse('https://ipapi.co/json/');
-        final ipRes = await http.get(ipUrl);
+        final ipRes = await http
+            .get(ipUrl, headers: headers)
+            .timeout(timeoutDur);
         if (ipRes.statusCode == 200) {
           final ipData = json.decode(ipRes.body);
-          lat = ipData['latitude'];
-          lon = ipData['longitude'];
-          nomeLocal =
-              '${ipData['city']} - ${ipData['region_code'] ?? ipData['region']}';
+          if (ipData['error'] != true) {
+            // Evita erro se a API bloquear
+            lat = ipData['latitude'];
+            lon = ipData['longitude'];
+            nomeLocal =
+                '${ipData['city']} - ${ipData['region_code'] ?? ipData['region']}';
+          }
         }
       }
 
@@ -171,15 +182,16 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,is_day,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=auto',
         );
 
-        final climaRes = await http.get(climaUrl);
+        final climaRes = await http
+            .get(climaUrl, headers: headers)
+            .timeout(timeoutDur);
         if (climaRes.statusCode == 200) {
           _processarRespostaOpenMeteo(climaRes.body, nomeLocal);
-        } else {
-          _definirClimaIndisponivel();
+          return; // Sucesso, finaliza a execução
         }
-      } else {
-        _definirClimaIndisponivel();
       }
+
+      _definirClimaIndisponivel();
     } catch (e) {
       debugPrint('Erro ao buscar clima: $e');
       _definirClimaIndisponivel();
@@ -189,35 +201,40 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   void _processarRespostaOpenMeteo(String responseBody, String nomeLocal) {
     try {
       final data = json.decode(responseBody);
-      final current = data['current'];
-      final daily = data['daily'];
+      // Proteção contra nulos na raiz da resposta
+      final current = data['current'] ?? {};
+      final daily = data['daily'] ?? {};
 
       int weatherCode = current['weather_code'] ?? 0;
       int isDay = current['is_day'] ?? 1;
 
       final infoClima = _traduzirWmo(weatherCode, isDay == 1);
 
-      // Pega a previsão do dia seguinte (índice 1 no array daily)
+      // Pega a previsão do dia seguinte com proteção de dados
       String previsaoAmanha = '';
-      if (daily != null &&
-          daily['temperature_2m_max'] != null &&
+      if (daily['temperature_2m_max'] != null &&
           daily['temperature_2m_max'].length > 1) {
-        String tempMax = daily['temperature_2m_max'][1].round().toString();
-        String tempMin = daily['temperature_2m_min'][1].round().toString();
-        int weatherCodeAmanha = daily['weather_code'][1];
-        final infoAmanha = _traduzirWmo(weatherCodeAmanha, true);
+        var tMax = daily['temperature_2m_max'][1];
+        var tMin = daily['temperature_2m_min'][1];
+        var wCode = daily['weather_code'][1];
 
-        previsaoAmanha =
-            'Amanhã: $tempMax° / $tempMin° (${infoAmanha['condicao']})';
+        if (tMax != null && tMin != null && wCode != null) {
+          String tempMax = tMax.round().toString();
+          String tempMin = tMin.round().toString();
+          final infoAmanha = _traduzirWmo(wCode, true);
+          previsaoAmanha =
+              'Amanhã: $tempMax° / $tempMin° (${infoAmanha['condicao']})';
+        }
       }
 
       // Formatando o Nascer e o Pôr do Sol
       String sol = '--';
-      if (daily != null &&
-          daily['sunrise'] != null &&
-          daily['sunrise'].length > 0) {
-        String sunriseStr = daily['sunrise'][0];
-        String sunsetStr = daily['sunset'][0];
+      if (daily['sunrise'] != null && daily['sunrise'].isNotEmpty) {
+        String sunriseStr = daily['sunrise'][0] ?? '';
+        String sunsetStr =
+            (daily['sunset'] != null && daily['sunset'].isNotEmpty)
+            ? daily['sunset'][0] ?? ''
+            : '';
         String nascer = sunriseStr.length >= 16
             ? sunriseStr.substring(11, 16)
             : '--';
@@ -227,21 +244,27 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         sol = '$nascer às $por';
       }
 
+      var currTemp = current['temperature_2m'];
+      var currHum = current['relative_humidity_2m'];
+
       if (mounted) {
         setState(() {
           _climaData = {
             'condicao': infoClima['condicao'],
-            'temperatura': current['temperature_2m'].round().toString(),
+            'temperatura': currTemp != null
+                ? currTemp.round().toString()
+                : '--',
             'icone': infoClima['icone'],
             'cor': infoClima['cor'],
             'cidade': nomeLocal,
-            'umidade': '${current['relative_humidity_2m'].round()}%',
+            'umidade': currHum != null ? '${currHum.round()}%' : '--',
             'sol': sol,
             'previsao_amanha': previsaoAmanha,
           };
         });
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Erro processando JSON do clima: $e');
       _definirClimaIndisponivel();
     }
   }
