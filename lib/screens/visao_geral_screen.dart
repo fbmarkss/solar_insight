@@ -1,18 +1,17 @@
 // Caminho: lib/screens/visao_geral_screen.dart
 // Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real (IBGE Autocomplete, Cache, Previsão Estendida), Gráfico e Alertas.
 
-import 'dart:convert';
 import 'package:flutter/material.dart';
-//import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:http/http.dart' as http;
 
 import '../services/dashboard_provider.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../services/sincronizacao_service.dart';
+// 🚀 IMPORTAMOS O NOSSO NOVO SERVIÇO DE CLIMA
+import '../services/clima_service.dart';
 import '../utils/app_feedback.dart';
 import '../utils/calculadora_energetica.dart';
 import 'lancamento_mensal_screen.dart';
@@ -31,7 +30,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   // Navegador independente que não esconde o Menu Lateral na Web
   final GlobalKey<NavigatorState> _nestedNavKey = GlobalKey<NavigatorState>();
 
-  // Estado inicial do Clima (Atualizado com mais dados)
+  // Estado inicial do Clima na Tela
   Map<String, dynamic> _climaData = {
     'condicao': 'Carregando...',
     'temperatura': '--',
@@ -43,9 +42,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     'previsao_amanha': '',
   };
 
-  // Cache em memória para as cidades do IBGE
-  List<String> _todasCidadesCache = [];
-
   @override
   void initState() {
     super.initState();
@@ -56,278 +52,26 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     _buscarClimaReal();
   }
 
-  // --- BUSCA CIDADES IBGE (PROTEGIDO CONTRA NULOS) ---
-  Future<Iterable<String>> _getSugestoesIBGE(String query) async {
-    if (query.isEmpty) {
-      return const Iterable<String>.empty();
-    }
-
-    // Se o cache estiver vazio, baixa da API do IBGE uma única vez
-    if (_todasCidadesCache.isEmpty) {
-      try {
-        final response = await http.get(
-          Uri.parse(
-            'https://servicodados.ibge.gov.br/api/v1/localidades/municipios',
-          ),
-        );
-        if (response.statusCode == 200) {
-          final List<dynamic> data = json.decode(response.body);
-          _todasCidadesCache = data.map((city) {
-            final nome = city['nome'] ?? '';
-            // Os sinais de '?' protegem contra cidades sem mesorregião (Ex: DF, Noronha)
-            final uf =
-                city['microrregiao']?['mesorregiao']?['UF']?['sigla'] ?? '';
-
-            return uf.isNotEmpty ? '$nome - $uf' : nome.toString();
-          }).toList();
-        }
-      } catch (e) {
-        debugPrint('Erro ao buscar IBGE: $e');
-      }
-    }
-
-    final normalizedQuery = _removerAcentosEChars(query.toLowerCase());
-    final matches = _todasCidadesCache
-        .where((cidade) {
-          return _removerAcentosEChars(
-            cidade.toLowerCase(),
-          ).contains(normalizedQuery);
-        })
-        .take(8)
-        .toList(); // Limita a 8 sugestões
-
-    return matches;
-  }
-
-  // Função auxiliar para ignorar acentos na pesquisa
-  String _removerAcentosEChars(String text) {
-    var comAcento = 'áàãâäéèêëíìîïóòõôöúùûüçñ';
-    var semAcento = 'aaaaaeeeeiiiiooooouuuucn';
-    for (int i = 0; i < comAcento.length; i++) {
-      text = text.replaceAll(comAcento[i], semAcento[i]);
-    }
-    return text;
-  }
-
-  // --- INTEGRAÇÃO OPEN-METEO (FALLBACK PARA IP) ---
+  // =======================================================================
+  // 🚀 INTEGRAÇÃO SIMPLIFICADA COM O NOVO SERVIÇO DE CLIMA
+  // =======================================================================
   Future<void> _buscarClimaReal({String? cidade}) async {
     if (!mounted) return;
+
+    // Mostra indicador visual de carregamento
     setState(() {
       _climaData['condicao'] = 'Buscando...';
-      _climaData['temperatura'] = '--'; // Reseta visualmente
+      _climaData['temperatura'] = '--';
     });
 
-    final box = Hive.box('sync_metadata');
+    // Chama o serviço isolado que resolve tudo (Cache, Anti-Spam e API)
+    final resultado = await ClimaService().buscarClimaReal(
+      cidadeManual: cidade,
+    );
 
-    // Se o usuário enviou uma cidade pelo BottomSheet
-    if (cidade != null) {
-      if (cidade.trim().isEmpty) {
-        box.delete('cidade_clima');
-      } else {
-        box.put('cidade_clima', cidade);
-      }
-    }
-
-    String? cidadeSalva = box.get('cidade_clima');
-    double? lat;
-    double? lon;
-    String nomeLocal = "Local desconhecido";
-
-    // Limite de tempo e identificação para evitar bloqueios no mobile
-    const timeoutDur = Duration(seconds: 8);
-    final headers = {'User-Agent': 'SolarInsightApp/1.0'};
-
-    try {
-      // 1. Busca coordenadas pela cidade selecionada (Geocoding API)
-      if (cidadeSalva != null && cidadeSalva.isNotEmpty) {
-        String nomePesquisa = cidadeSalva.split('-')[0].trim();
-        final geoUrl = Uri.parse(
-          'https://geocoding-api.open-meteo.com/v1/search?name=${Uri.encodeComponent(nomePesquisa)}&count=1&language=pt',
-        );
-        final geoRes = await http
-            .get(geoUrl, headers: headers)
-            .timeout(timeoutDur);
-
-        if (geoRes.statusCode == 200) {
-          final geoData = json.decode(geoRes.body);
-          if (geoData['results'] != null && geoData['results'].isNotEmpty) {
-            lat = geoData['results'][0]['latitude'];
-            lon = geoData['results'][0]['longitude'];
-            nomeLocal = cidadeSalva; // Mantém o formato "Cidade - UF"
-          }
-        }
-      }
-
-      // 2. Se não houver cidade salva ou falhou, tenta descobrir por IP
-      if (lat == null || lon == null) {
-        final ipUrl = Uri.parse('https://ipapi.co/json/');
-        final ipRes = await http
-            .get(ipUrl, headers: headers)
-            .timeout(timeoutDur);
-        if (ipRes.statusCode == 200) {
-          final ipData = json.decode(ipRes.body);
-          if (ipData['error'] != true) {
-            // Evita erro se a API bloquear
-            lat = ipData['latitude'];
-            lon = ipData['longitude'];
-            nomeLocal =
-                '${ipData['city']} - ${ipData['region_code'] ?? ipData['region']}';
-          }
-        }
-      }
-
-      // 3. Busca o Clima no Open-Meteo
-      if (lat != null && lon != null) {
-        final climaUrl = Uri.parse(
-          'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,is_day,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset&timezone=auto',
-        );
-
-        final climaRes = await http
-            .get(climaUrl, headers: headers)
-            .timeout(timeoutDur);
-        if (climaRes.statusCode == 200) {
-          _processarRespostaOpenMeteo(climaRes.body, nomeLocal);
-          return; // Sucesso, finaliza a execução
-        }
-      }
-
-      _definirClimaIndisponivel();
-    } catch (e) {
-      debugPrint('Erro ao buscar clima: $e');
-      _definirClimaIndisponivel();
-    }
-  }
-
-  void _processarRespostaOpenMeteo(String responseBody, String nomeLocal) {
-    try {
-      final data = json.decode(responseBody);
-      // Proteção contra nulos na raiz da resposta
-      final current = data['current'] ?? {};
-      final daily = data['daily'] ?? {};
-
-      int weatherCode = current['weather_code'] ?? 0;
-      int isDay = current['is_day'] ?? 1;
-
-      final infoClima = _traduzirWmo(weatherCode, isDay == 1);
-
-      // Pega a previsão do dia seguinte com proteção de dados
-      String previsaoAmanha = '';
-      if (daily['temperature_2m_max'] != null &&
-          daily['temperature_2m_max'].length > 1) {
-        var tMax = daily['temperature_2m_max'][1];
-        var tMin = daily['temperature_2m_min'][1];
-        var wCode = daily['weather_code'][1];
-
-        if (tMax != null && tMin != null && wCode != null) {
-          String tempMax = tMax.round().toString();
-          String tempMin = tMin.round().toString();
-          final infoAmanha = _traduzirWmo(wCode, true);
-          previsaoAmanha =
-              'Amanhã: $tempMax° / $tempMin° (${infoAmanha['condicao']})';
-        }
-      }
-
-      // Formatando o Nascer e o Pôr do Sol
-      String sol = '--';
-      if (daily['sunrise'] != null && daily['sunrise'].isNotEmpty) {
-        String sunriseStr = daily['sunrise'][0] ?? '';
-        String sunsetStr =
-            (daily['sunset'] != null && daily['sunset'].isNotEmpty)
-            ? daily['sunset'][0] ?? ''
-            : '';
-        String nascer = sunriseStr.length >= 16
-            ? sunriseStr.substring(11, 16)
-            : '--';
-        String por = sunsetStr.length >= 16
-            ? sunsetStr.substring(11, 16)
-            : '--';
-        sol = '$nascer às $por';
-      }
-
-      var currTemp = current['temperature_2m'];
-      var currHum = current['relative_humidity_2m'];
-
-      if (mounted) {
-        setState(() {
-          _climaData = {
-            'condicao': infoClima['condicao'],
-            'temperatura': currTemp != null
-                ? currTemp.round().toString()
-                : '--',
-            'icone': infoClima['icone'],
-            'cor': infoClima['cor'],
-            'cidade': nomeLocal,
-            'umidade': currHum != null ? '${currHum.round()}%' : '--',
-            'sol': sol,
-            'previsao_amanha': previsaoAmanha,
-          };
-        });
-      }
-    } catch (e) {
-      debugPrint('Erro processando JSON do clima: $e');
-      _definirClimaIndisponivel();
-    }
-  }
-
-  // Tradutor Oficial dos Códigos da Organização Meteorológica Mundial (WMO)
-  Map<String, dynamic> _traduzirWmo(int code, bool isDay) {
-    String condicao = "Desconhecido";
-    IconData icone = Icons.cloud_outlined;
-    Color cor = Colors.blueGrey;
-
-    if (code == 0) {
-      condicao = "Céu Limpo";
-      icone = isDay ? Icons.wb_sunny_rounded : Icons.nightlight_round;
-      cor = isDay ? Colors.orange : Colors.blueGrey;
-    } else if (code == 1 || code == 2 || code == 3) {
-      condicao = code == 1
-          ? "Principalmente Limpo"
-          : code == 2
-          ? "Parcialmente Nublado"
-          : "Nublado";
-      icone = code == 3
-          ? Icons.cloud_rounded
-          : (isDay ? Icons.wb_cloudy_rounded : Icons.nightlight_round);
-      cor = code == 3
-          ? Colors.grey
-          : (isDay ? Colors.orangeAccent : Colors.blueGrey);
-    } else if (code == 45 || code == 48) {
-      condicao = "Nevoeiro";
-      icone = Icons.foggy;
-      cor = Colors.grey;
-    } else if (code >= 51 && code <= 55) {
-      condicao = "Chuvisco";
-      icone = Icons.grain;
-      cor = Colors.lightBlue;
-    } else if (code >= 61 && code <= 67) {
-      condicao = "Chuva";
-      icone = Icons.water_drop_rounded;
-      cor = Colors.blue;
-    } else if (code >= 71 && code <= 77) {
-      condicao = "Neve";
-      icone = Icons.ac_unit_rounded;
-      cor = Colors.lightBlueAccent;
-    } else if (code >= 80 && code <= 82) {
-      condicao = "Pancadas de Chuva";
-      icone = Icons.water_drop_rounded;
-      cor = Colors.blueAccent;
-    } else if (code >= 95 && code <= 99) {
-      condicao = "Tempestade";
-      icone = Icons.thunderstorm_rounded;
-      cor = Colors.deepPurple;
-    }
-
-    return {'condicao': condicao, 'icone': icone, 'cor': cor};
-  }
-
-  void _definirClimaIndisponivel() {
     if (mounted) {
       setState(() {
-        _climaData['condicao'] = 'Indisponível';
-        _climaData['temperatura'] = '--';
-        _climaData['umidade'] = '--';
-        _climaData['sol'] = '--';
-        _climaData['previsao_amanha'] = '';
+        _climaData = resultado; // Atualiza a tela com o mapa pronto
       });
     }
   }
@@ -392,11 +136,14 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // --- AUTOCOMPLETE IBGE ---
+                // --- AUTOCOMPLETE IBGE USANDO O SERVIÇO ---
                 Autocomplete<String>(
                   initialValue: TextEditingValue(text: cidadeAtual),
                   optionsBuilder: (TextEditingValue textEditingValue) async {
-                    return await _getSugestoesIBGE(textEditingValue.text);
+                    // 🚀 O Serviço de Clima agora cuida da pesquisa do IBGE
+                    return await ClimaService().getSugestoesIBGE(
+                      textEditingValue.text,
+                    );
                   },
                   onSelected: (String selection) {
                     cidadeSelecionada = selection;
@@ -538,7 +285,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                     ),
                   ),
                 ),
-                // Espaço de segurança para não sumir atrás da barra do tablet
                 SizedBox(height: MediaQuery.of(ctx).padding.bottom + 24),
               ],
             ),
@@ -1125,7 +871,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
             ],
           ),
 
-          // --- NOVA SEÇÃO DE DADOS EXTRAS DO CLIMA ---
           if (_climaData['temperatura'] != '--') ...[
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 12),
@@ -1171,17 +916,15 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                       color: Colors.grey.shade600,
                     ),
                     const SizedBox(width: 8),
-                    // 👇 A MÁGICA AQUI: Flexible SEM o overflow permite a quebra de linha
                     Flexible(
                       child: Text(
                         _climaData['previsao_amanha'],
-                        textAlign:
-                            TextAlign.center, // Centraliza o texto se quebrar
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.grey.shade700,
                           fontWeight: FontWeight.w600,
-                          height: 1.3, // Dá um leve respiro entre as linhas
+                          height: 1.3,
                         ),
                       ),
                     ),
@@ -1195,7 +938,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // Novo widget auxiliar para organizar Umidade e Sol no card de Clima
   Widget _buildMiniClimaInfo(
     IconData icon,
     String label,
@@ -1223,13 +965,9 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // --- NOVO CARD DE IMPACTO AMBIENTAL (COMPACTO COM CO2) ---
   Widget _buildEnvironmentalCard(double totalGerado) {
-    double arvores =
-        totalGerado /
-        400; // Base: 1 árvore absorve cerca de 400 kWh de equivalência
-    double co2Kg =
-        totalGerado * 0.10; // Brasil: matriz limpa -> ~100g de CO2 por kWh
+    double arvores = totalGerado / 400;
+    double co2Kg = totalGerado * 0.10;
     double co2Ton = co2Kg / 1000;
 
     return Container(
@@ -1414,9 +1152,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     }
   }
 
-  // ===========================================================================
-  // GRÁFICO DE ONDA (SPLINE)
-  // ===========================================================================
   Widget _buildWaveChartCard(DashboardProvider dash, {bool isMobile = false}) {
     List<MapEntry<DateTime, double>> dados = _obterDadosGrafico(dash);
     double totalPeriodo = 0;
@@ -1511,10 +1246,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
       ),
     );
   }
-
-  // ===========================================================================
-  // WIDGETS COMUNS E CARTÕES DE RESUMO
-  // ===========================================================================
 
   Widget _buildFiltro(DashboardProvider dash) {
     final usinasGeradoras = dash
@@ -1658,7 +1389,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   Text(
-                    dash.nomeMesReferencia, // Aqui a mágica acontece (Ex: "JULHO 2026")
+                    dash.nomeMesReferencia,
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                 ],
@@ -2412,7 +2143,7 @@ class _WaveChartPainter extends CustomPainter {
     // Calcula os pontos X,Y
     for (int i = 0; i < dados.length; i++) {
       double x = marginX + (i * stepX);
-      if (dados.length == 1) x = size.width / 2; // Centraliza se for só 1 dado
+      if (dados.length == 1) x = size.width / 2;
 
       double dy =
           paddingTop + chartHeight - ((dados[i].value / maxVal) * chartHeight);
@@ -2423,7 +2154,6 @@ class _WaveChartPainter extends CustomPainter {
     final fillPath = Path();
 
     if (points.length == 1) {
-      // Se houver apenas 1 ponto, desenha uma linha reta simples
       path.moveTo(marginX, points[0].dy);
       path.lineTo(size.width - marginX, points[0].dy);
 
@@ -2432,7 +2162,6 @@ class _WaveChartPainter extends CustomPainter {
       fillPath.lineTo(size.width - marginX, points[0].dy);
       fillPath.lineTo(size.width - marginX, chartBottomY);
     } else {
-      // Cria a Curva de Bézier para a Onda
       path.moveTo(points[0].dx, points[0].dy);
       fillPath.moveTo(points[0].dx, chartBottomY);
       fillPath.lineTo(points[0].dx, points[0].dy);
@@ -2441,7 +2170,6 @@ class _WaveChartPainter extends CustomPainter {
         final p0 = points[i];
         final p1 = points[i + 1];
 
-        // Pontos de controle para suavizar a curva
         final controlPointX = p0.dx + (p1.dx - p0.dx) / 2;
 
         path.cubicTo(controlPointX, p0.dy, controlPointX, p1.dy, p1.dx, p1.dy);
@@ -2460,7 +2188,6 @@ class _WaveChartPainter extends CustomPainter {
 
     fillPath.close();
 
-    // Gradiente abaixo da onda
     final gradient = LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
@@ -2475,7 +2202,6 @@ class _WaveChartPainter extends CustomPainter {
         Rect.fromLTWH(0, paddingTop, size.width, chartHeight),
       );
 
-    // Pincel da linha da onda
     final paintLine = Paint()
       ..color = Colors.orangeAccent
       ..strokeWidth = 4
@@ -2485,7 +2211,6 @@ class _WaveChartPainter extends CustomPainter {
     canvas.drawPath(fillPath, paintFill);
     canvas.drawPath(path, paintLine);
 
-    // Desenha os pontos e os textos
     final textPainter = TextPainter(textDirection: TextDirection.ltr);
     final mesesAbrev = [
       'Jan',
@@ -2511,11 +2236,9 @@ class _WaveChartPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     for (int i = 0; i < points.length; i++) {
-      // O ponto (bolinha)
       canvas.drawCircle(points[i], 5, paintDot);
       canvas.drawCircle(points[i], 5, paintDotBorder);
 
-      // Texto do Mês (Eixo X)
       String mesLabel = mesesAbrev[dados[i].key.month - 1];
       textPainter.text = TextSpan(
         text: mesLabel,
@@ -2531,7 +2254,6 @@ class _WaveChartPainter extends CustomPainter {
         Offset(points[i].dx - (textPainter.width / 2), chartBottomY + 12),
       );
 
-      // Texto do Valor (Acima do Ponto)
       double valor = dados[i].value;
       String valorFormatado = valor >= 1000
           ? '${(valor / 1000).toStringAsFixed(1).replaceAll('.0', '')}k'
