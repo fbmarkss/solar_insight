@@ -1,8 +1,9 @@
 // Caminho: lib/main.dart
 // Descrição: Inicialização Híbrida (Web + Mobile) com Firebase, Hive e Providers (incluindo Assinatura e Variáveis de Ambiente) configurados.
+// CORREÇÃO: Persistência de login robusta no Android (initialData no StreamBuilder) + setPersistence apenas na Web.
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'; // <--- Necessário para verificar se é Web (kIsWeb)
+import 'package:flutter/foundation.dart'; // Necessário para verificar se é Web (kIsWeb)
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -10,7 +11,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:path_provider/path_provider.dart'; // Importante para Mobile
 import 'package:provider/provider.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart'; // <--- NOVO IMPORT PARA O .ENV
+import 'package:flutter_dotenv/flutter_dotenv.dart'; // Variáveis de ambiente
 
 // O arquivo abaixo é gerado pelo comando 'flutterfire configure'
 import 'firebase_options.dart';
@@ -18,7 +19,7 @@ import 'firebase_options.dart';
 import 'models/usina.dart';
 import 'models/lancamento.dart';
 import 'services/dashboard_provider.dart';
-import 'services/subscription_provider.dart'; // <--- IMPORT DO GUARDIÃO
+import 'services/subscription_provider.dart'; // Guardião de Assinatura
 import 'screens/auth/login_screen.dart';
 import 'screens/main_navigation_screen.dart';
 
@@ -31,7 +32,9 @@ void main() async {
   // 2. Inicializa Firebase com Opções (CRUCIAL PARA WEB)
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // --- FORÇA PERSISTÊNCIA DO LOGIN NA WEB PARA EVITAR O "CARREGANDO" INFINITO ---
+  // --- FORÇA PERSISTÊNCIA DO LOGIN NA WEB ---
+  // ⚠️ setPersistence SÓ existe/funciona na Web.
+  // No Android/iOS o Firebase Auth persiste automaticamente via SharedPreferences/Keychain.
   if (kIsWeb) {
     await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
   }
@@ -104,11 +107,18 @@ class SolarInsightApp extends StatelessWidget {
       ],
       supportedLocales: const [Locale('pt', 'BR')],
 
-      // --- LÓGICA DE PERSISTÊNCIA DE LOGIN ---
+      // --- LÓGICA DE PERSISTÊNCIA DE LOGIN (CORRIGIDA) ---
+      // ✅ initialData: restaura imediatamente o usuário do cache local do Firebase Auth,
+      //    evitando "flash" de tela de login no cold start do Android.
+      // ✅ ConnectionState.waiting só bloqueia a UI se ainda não temos usuário em cache.
+      // ✅ Única fonte de verdade: LoginScreen NÃO deve mais redirecionar manualmente.
       home: StreamBuilder<User?>(
         stream: FirebaseAuth.instance.authStateChanges(),
+        initialData: FirebaseAuth.instance.currentUser,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          // Só mostra o loading se realmente não sabemos ainda o estado do usuário.
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              snapshot.data == null) {
             return const Scaffold(
               body: Center(
                 child: CircularProgressIndicator(color: Colors.deepOrange),
@@ -116,7 +126,7 @@ class SolarInsightApp extends StatelessWidget {
             );
           }
 
-          if (snapshot.hasData) {
+          if (snapshot.hasData && snapshot.data != null) {
             return const MainNavigationScreen();
           }
 

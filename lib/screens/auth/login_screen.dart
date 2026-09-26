@@ -1,10 +1,11 @@
 // Caminho: lib/screens/auth/login_screen.dart
 // Descrição: Tela de Login REAL (Conectada ao Firebase) com Layout Responsivo para Web/Mobile.
+// CORREÇÃO: Removido o initState com navegação automática. Agora o StreamBuilder do main.dart
+//           é a ÚNICA fonte de verdade sobre o estado de autenticação.
 
 import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import '../../utils/app_feedback.dart';
-import '../../screens/main_navigation_screen.dart';
 import 'register_screen.dart';
 import 'forgot_password_screen.dart';
 
@@ -23,20 +24,11 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
 
-  @override
-  void initState() {
-    super.initState();
-    // Verifica se já tem alguém logado ao abrir
-    // Se tiver, pula direto para o app (Auto-Login)
-    if (_authService.currentUser != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
-        );
-      });
-    }
-  }
+  // ⚠️ initState REMOVIDO INTENCIONALMENTE.
+  // O StreamBuilder em main.dart já escuta authStateChanges() e decide
+  // automaticamente entre LoginScreen e MainNavigationScreen.
+  // Antes havia uma navegação manual aqui que conflitava com o StreamBuilder,
+  // causando deslogamento no cold start do Android.
 
   Future<void> _fazerLogin() async {
     final email = _emailController.text.trim();
@@ -55,15 +47,29 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _isLoading = false);
 
       if (erro == null) {
-        // Sucesso! Entra no app
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
-        );
+        // ✅ IMPORTANTE: Não navegamos manualmente.
+        // O authStateChanges() do StreamBuilder em main.dart detectará o novo
+        // usuário logado e trocará a tela automaticamente.
+        // Se você navegar aqui + o StreamBuilder navegar, ocorre conflito.
+        //
+        // Caso queira garantir a troca imediata (sem esperar 1 frame do stream),
+        // descomente as linhas abaixo:
+        //
+        // Navigator.pushReplacement(
+        //   context,
+        //   MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
+        // );
       } else {
         AppFeedback.show(context, erro, isError: true);
       }
     }
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _senhaController.dispose();
+    super.dispose();
   }
 
   @override
@@ -137,8 +143,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextFormField(
                           controller: _emailController,
                           keyboardType: TextInputType.emailAddress,
-                          textInputAction: TextInputAction
-                              .next, // <--- NOVO: Mostra "Próximo" no teclado do celular
+                          textInputAction: TextInputAction.next,
                           decoration: InputDecoration(
                             labelText: "E-mail",
                             prefixIcon: const Icon(Icons.email_outlined),
@@ -157,10 +162,8 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextFormField(
                           controller: _senhaController,
                           obscureText: _obscurePassword,
-                          textInputAction: TextInputAction
-                              .done, // <--- NOVO: Mostra "Concluído/Ir" no celular
-                          onFieldSubmitted: (_) =>
-                              _fazerLogin(), // <--- NOVO: Ouve o ENTER no teclado (Web/Mobile)
+                          textInputAction: TextInputAction.done,
+                          onFieldSubmitted: (_) => _fazerLogin(),
                           decoration: InputDecoration(
                             labelText: "Senha",
                             prefixIcon: const Icon(Icons.lock_outline),
