@@ -1,10 +1,16 @@
 // Caminho: lib/screens/auth/login_screen.dart
 // Descrição: Tela de Login REAL (Conectada ao Firebase) com Layout Responsivo para Web/Mobile.
-// CORREÇÃO: Removido o initState com navegação automática. Agora o StreamBuilder do main.dart
-//           é a ÚNICA fonte de verdade sobre o estado de autenticação.
+// ALTERAÇÕES DESTA VERSÃO:
+//   - Removido initState com navegação automática (o StreamBuilder do main.dart é a única fonte de verdade).
+//   - Removido import órfão de main_navigation_screen.dart.
+//   - Adicionado SessionManager.prepararNovaSessao() no sucesso do login
+//     para garantir limpeza de Hive antes de trocar de usuário.
+//   - Adicionado dispose() dos controllers (boa prática).
+//   - UI e layout 100% preservados.
 
 import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
+import '../../services/session_manager.dart'; // ✅ NOVO
 import '../../utils/app_feedback.dart';
 import 'register_screen.dart';
 import 'forgot_password_screen.dart';
@@ -30,6 +36,13 @@ class _LoginScreenState extends State<LoginScreen> {
   // Antes havia uma navegação manual aqui que conflitava com o StreamBuilder,
   // causando deslogamento no cold start do Android.
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _senhaController.dispose();
+    super.dispose();
+  }
+
   Future<void> _fazerLogin() async {
     final email = _emailController.text.trim();
     final senha = _senhaController.text.trim();
@@ -43,33 +56,23 @@ class _LoginScreenState extends State<LoginScreen> {
 
     String? erro = await _authService.login(email, senha);
 
-    if (mounted) {
+    if (!mounted) return;
+
+    if (erro == null) {
+      // ✅ Limpa qualquer resíduo do usuário anterior ANTES de o StreamBuilder
+      //    trocar automaticamente para MainNavigationScreen.
+      //    Isso evita "contaminação" de dados entre contas na Web.
+      await SessionManager.prepararNovaSessao();
+
+      // Não navegamos manualmente: o authStateChanges() do StreamBuilder em
+      // main.dart detecta o novo usuário logado e troca a tela.
+      // Se o widget já foi desmontado durante o await, apenas ignoramos.
+      if (!mounted) return;
       setState(() => _isLoading = false);
-
-      if (erro == null) {
-        // ✅ IMPORTANTE: Não navegamos manualmente.
-        // O authStateChanges() do StreamBuilder em main.dart detectará o novo
-        // usuário logado e trocará a tela automaticamente.
-        // Se você navegar aqui + o StreamBuilder navegar, ocorre conflito.
-        //
-        // Caso queira garantir a troca imediata (sem esperar 1 frame do stream),
-        // descomente as linhas abaixo:
-        //
-        // Navigator.pushReplacement(
-        //   context,
-        //   MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
-        // );
-      } else {
-        AppFeedback.show(context, erro, isError: true);
-      }
+    } else {
+      setState(() => _isLoading = false);
+      AppFeedback.show(context, erro, isError: true);
     }
-  }
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _senhaController.dispose();
-    super.dispose();
   }
 
   @override

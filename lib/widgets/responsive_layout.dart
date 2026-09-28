@@ -1,9 +1,16 @@
 // Caminho: lib/widgets/responsive_layout.dart
 // Descrição: Layout com Sidebar fixo em 1200px para Web, integrado ao Firestore para dados de utilizador reais.
+// ALTERAÇÃO DESTA VERSÃO:
+//   - Botão "Sair" da sidebar Web agora usa SessionManager.logout(context)
+//     em vez de FirebaseAuth.instance.signOut() direto.
+//   - Isso garante: sync best-effort → limpeza de Hive → reset de Providers
+//     → reset do motor reativo → signOut. Elimina contaminação entre usuários.
+//   - Todo o resto permanece intacto.
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/session_manager.dart'; // <-- NOVO IMPORT
 
 class ResponsiveLayout extends StatelessWidget {
   final int currentIndex;
@@ -316,11 +323,25 @@ class ResponsiveLayout extends StatelessWidget {
                   iconColor: Colors.blue,
                   onTap: () => onSyncTap?.call(),
                 ),
+                // ============================================================
+                // ✅ ALTERAÇÃO: Logout centralizado via SessionManager
+                // ------------------------------------------------------------
+                // Fluxo completo:
+                //   1. Pausa o motor reativo
+                //   2. Sync best-effort (timeout 6s)
+                //   3. Limpa fila de sync
+                //   4. Limpa Hive (usinas, lancamentos, sync_metadata, auth_cache)
+                //   5. Reset dos Providers
+                //   6. Reset do motor reativo
+                //   7. FirebaseAuth.signOut() → StreamBuilder do main troca para Login
+                // ============================================================
                 _buildMenuItem(
                   icon: Icons.logout_rounded,
                   label: 'Sair',
                   iconColor: Colors.red,
-                  onTap: () async => await FirebaseAuth.instance.signOut(),
+                  onTap: () async {
+                    await SessionManager.logout(context);
+                  },
                 ),
               ],
             ),

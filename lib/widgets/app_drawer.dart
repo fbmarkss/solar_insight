@@ -1,16 +1,17 @@
 // Caminho: lib/widgets/app_drawer.dart
 // Descrição: Menu lateral Mobile. Extrai Nome, Empresa e Cargo do Firestore.
+// ALTERAÇÃO: Logout agora usa SessionManager (limpa Hive + Providers + sincroniza antes).
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../screens/auth/login_screen.dart';
-import '../services/auth_service.dart';
+import '../services/session_manager.dart';
 import '../screens/admin/minha_equipe_screen.dart';
 import '../screens/admin/historico_atividades_screen.dart';
 import '../screens/configuracao_dados_screen.dart';
 import '../screens/admin/meu_plano_screen.dart';
-import '../screens/configuracoes_screen.dart'; // <-- IMPORT DA TELA ADICIONADO
+import '../screens/configuracoes_screen.dart';
 
 class AppDrawer extends StatelessWidget {
   const AppDrawer({super.key});
@@ -34,7 +35,6 @@ class AppDrawer extends StatelessWidget {
           final String nomeUsuarioFirestore =
               userData?['nome'] ?? "Carregando...";
 
-          // Define a string do cargo
           final String cargo = isAdmin ? "Administrador" : "Usuário";
 
           final letraInicial =
@@ -69,7 +69,6 @@ class AppDrawer extends StatelessWidget {
                     ),
                   ),
                 ),
-                // Exibe Nome e Empresa
                 accountName: Text(
                   nomeEmpresa.isNotEmpty
                       ? "$nomeUsuarioFirestore | $nomeEmpresa"
@@ -79,7 +78,6 @@ class AppDrawer extends StatelessWidget {
                     fontSize: 16,
                   ),
                 ),
-                // Exibe Cargo e Email
                 accountEmail: Text("$cargo • $email"),
               ),
 
@@ -199,7 +197,6 @@ class AppDrawer extends StatelessWidget {
                 leading: const Icon(Icons.settings_outlined),
                 title: const Text('Configurações do App'),
                 onTap: () {
-                  // Lógica adicionada: Fecha o menu e abre as Configurações
                   Navigator.pop(context);
                   Navigator.push(
                     context,
@@ -221,13 +218,12 @@ class AppDrawer extends StatelessWidget {
                     style: TextStyle(color: Colors.red),
                   ),
                   onTap: () async {
-                    await AuthService().logout();
+                    // ✅ Logout centralizado: sincroniza + limpa Hive + Providers + Firebase
+                    await SessionManager.logout(context);
+                    // Não navegamos manualmente: o StreamBuilder do main.dart
+                    // detecta o signOut e volta para LoginScreen.
                     if (context.mounted) {
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(builder: (_) => const LoginScreen()),
-                        (route) => false,
-                      );
+                      Navigator.pop(context); // fecha o drawer
                     }
                   },
                 )
@@ -242,6 +238,7 @@ class AppDrawer extends StatelessWidget {
                     ),
                   ),
                   onTap: () {
+                    Navigator.pop(context);
                     Navigator.pushAndRemoveUntil(
                       context,
                       MaterialPageRoute(builder: (_) => const LoginScreen()),

@@ -1,25 +1,30 @@
 // Caminho: lib/main.dart
-// Descrição: Inicialização Híbrida (Web + Mobile) com Firebase, Hive e Providers (incluindo Assinatura e Variáveis de Ambiente) configurados.
-// CORREÇÃO: Persistência de login robusta no Android (initialData no StreamBuilder) + setPersistence apenas na Web.
+// Descrição: Inicialização Híbrida (Web + Mobile + Windows) com Firebase, Hive e Providers.
+// CORREÇÕES DESTA VERSÃO:
+//   1. Persistência de login robusta (initialData no StreamBuilder) — corrige deslogamento no Android.
+//   2. setPersistence apenas na Web (Android/iOS/Windows já persistem automaticamente).
+//   3. Lifecycle observer para disparar sync best-effort quando o app vai para background.
+//   4. main() e SolarInsightApp entregues juntos, num único bloco íntegro.
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'; // Necessário para verificar se é Web (kIsWeb)
+import 'package:flutter/foundation.dart'; // kIsWeb, AppLifecycleState
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:path_provider/path_provider.dart'; // Importante para Mobile
+import 'package:path_provider/path_provider.dart'; // Importante para Mobile/Desktop
 import 'package:provider/provider.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart'; // Variáveis de ambiente
 
-// O arquivo abaixo é gerado pelo comando 'flutterfire configure'
+// Arquivo gerado pelo comando 'flutterfire configure'
 import 'firebase_options.dart';
 
 import 'models/usina.dart';
 import 'models/lancamento.dart';
 import 'services/dashboard_provider.dart';
-import 'services/subscription_provider.dart'; // Guardião de Assinatura
+import 'services/subscription_provider.dart';
+import 'services/sincronizacao_service.dart'; // ✅ NOVO: para o ciclo de vida
 import 'screens/auth/login_screen.dart';
 import 'screens/main_navigation_screen.dart';
 
@@ -34,12 +39,13 @@ void main() async {
 
   // --- FORÇA PERSISTÊNCIA DO LOGIN NA WEB ---
   // ⚠️ setPersistence SÓ existe/funciona na Web.
-  // No Android/iOS o Firebase Auth persiste automaticamente via SharedPreferences/Keychain.
+  // No Android/iOS/Windows o Firebase Auth persiste automaticamente
+  // via SharedPreferences/Keychain/arquivo local.
   if (kIsWeb) {
     await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
   }
 
-  // 3. Inicializa Hive (Lógica Híbrida Web/Mobile)
+  // 3. Inicializa Hive (Lógica Híbrida Web/Mobile/Desktop)
   if (kIsWeb) {
     await Hive.initFlutter();
   } else {
@@ -75,8 +81,47 @@ void main() async {
   );
 }
 
-class SolarInsightApp extends StatelessWidget {
+// =============================================================================
+// APLICAÇÃO PRINCIPAL
+// =============================================================================
+class SolarInsightApp extends StatefulWidget {
   const SolarInsightApp({super.key});
+
+  @override
+  State<SolarInsightApp> createState() => _SolarInsightAppState();
+}
+
+class _SolarInsightAppState extends State<SolarInsightApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    // Registra o observer de ciclo de vida (background / fechamento)
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // =========================================================================
+  // CAMADA 2: Sync best-effort quando o app vai para background/fechar
+  // -------------------------------------------------------------------------
+  // Web: chamado ao trocar de aba (não garante fechamento de aba)
+  // Mobile/Windows: chamado ao minimizar/fechar
+  // O sync é fire-and-forget: NÃO bloqueia, pois o SO pode matar o processo.
+  // A garantia total vem do botão "Sair" (SessionManager.logout).
+  // =========================================================================
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.inactive) {
+      SincronizacaoService.dispararSyncEmergencial();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,11 +152,11 @@ class SolarInsightApp extends StatelessWidget {
       ],
       supportedLocales: const [Locale('pt', 'BR')],
 
-      // --- LÓGICA DE PERSISTÊNCIA DE LOGIN (CORRIGIDA) ---
+      // --- LÓGICA DE PERSISTÊNCIA DE LOGIN ---
       // ✅ initialData: restaura imediatamente o usuário do cache local do Firebase Auth,
       //    evitando "flash" de tela de login no cold start do Android.
       // ✅ ConnectionState.waiting só bloqueia a UI se ainda não temos usuário em cache.
-      // ✅ Única fonte de verdade: LoginScreen NÃO deve mais redirecionar manualmente.
+      // ✅ Única fonte de verdade: LoginScreen NÃO redireciona manualmente.
       home: StreamBuilder<User?>(
         stream: FirebaseAuth.instance.authStateChanges(),
         initialData: FirebaseAuth.instance.currentUser,

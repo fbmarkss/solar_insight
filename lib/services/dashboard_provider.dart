@@ -1,4 +1,6 @@
 // Caminho: lib/services/dashboard_provider.dart
+// ALTERAÇÃO: Adicionado método reset() para limpeza total no logout.
+
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
@@ -10,7 +12,7 @@ import '../services/sincronizacao_service.dart';
 class DashboardProvider extends ChangeNotifier {
   // --- TOTAIS VITALÍCIOS (GERAIS) ---
   double totalGerado = 0;
-  double totalEconomizado = 0; // Soma de TODAS as usinas (para o Card Verde)
+  double totalEconomizado = 0;
   double saldoCreditosTotal = 0;
   double totalEnergiaDistribuida = 0;
 
@@ -19,7 +21,6 @@ class DashboardProvider extends ChangeNotifier {
   double _investimentoConsideradoROI = 0;
   int _usinasSemInvestimentoCount = 0;
 
-  // Getters para o ROI ponderado
   double get economiaConsideradaROI => _economiaConsideradaROI;
   double get investimentoConsideradoROI => _investimentoConsideradoROI;
   int get usinasSemInvestimentoCount => _usinasSemInvestimentoCount;
@@ -49,18 +50,45 @@ class DashboardProvider extends ChangeNotifier {
     _carregarDados();
   }
 
+  // ===========================================================================
+  // RESET (para uso no logout — limpa tudo sem depender do Hive)
+  // ===========================================================================
+  /// Zera todos os campos e notifica. Chamado pelo SessionManager no logout.
+  void reset() {
+    totalGerado = 0;
+    totalEconomizado = 0;
+    saldoCreditosTotal = 0;
+    totalEnergiaDistribuida = 0;
+
+    _economiaConsideradaROI = 0;
+    _investimentoConsideradoROI = 0;
+    _usinasSemInvestimentoCount = 0;
+
+    potenciaInstaladaNominal = 0;
+    eficienciaGlobalMedia = 100;
+    totalUsinas = 0;
+
+    geracaoMensal = 0;
+    consumoMensalReal = 0;
+    nomeMesReferencia = "---";
+
+    alertasDoSistema = [];
+
+    _listaUsinas = [];
+    _usinaSelecionada = null;
+
+    _isLoading = true;
+    notifyListeners();
+  }
+
   /// Método para disparar a sincronização manual e atualizar a interface
   Future<String> sincronizarDados() async {
     _isLoading = true;
     notifyListeners();
 
     try {
-      // 1. Executa a Sincronização e a Faxina Inteligente
       final resultado = await SincronizacaoService().sincronizarTudo();
-
-      // 2. Recarrega os dados locais (Hive) para refletir a limpeza/novos dados
       await _carregarDados();
-
       return resultado;
     } catch (e) {
       _isLoading = false;
@@ -83,18 +111,22 @@ class DashboardProvider extends ChangeNotifier {
   Future<void> _carregarDados() async {
     _isLoading = true;
 
-    // Garantir que as boxes estão abertas e prontas
+    // ⚠️ PROTEÇÃO: se as boxes não estão abertas, aborta silenciosamente
+    if (!Hive.isBoxOpen('usinas') || !Hive.isBoxOpen('lancamentos')) {
+      _isLoading = false;
+      notifyListeners();
+      return;
+    }
+
     final boxUsinas = Hive.box<Usina>('usinas');
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
 
-    // 1. Filtrar apenas usinas ativas e NÃO deletadas
     _listaUsinas = boxUsinas.values
         .where((u) => u.ativa && !u.isDeletado)
         .toList();
 
     List<Usina> usinasParaCalcular;
     if (_usinaSelecionada != null) {
-      // Se a usina selecionada sumiu ou foi deletada, volta para "Todas"
       if (_usinaSelecionada!.isDeletado || !_usinaSelecionada!.ativa) {
         _usinaSelecionada = null;
         usinasParaCalcular = _listaUsinas;
@@ -105,7 +137,6 @@ class DashboardProvider extends ChangeNotifier {
       usinasParaCalcular = _listaUsinas;
     }
 
-    // Variáveis Gerais
     double somaGeracaoTotal = 0;
     double somaEconomiaTotal = 0;
     double somaSaldo = 0;
@@ -113,7 +144,6 @@ class DashboardProvider extends ChangeNotifier {
     double somaPotenciaNominal = 0;
     double somaEficienciaPonderada = 0;
 
-    // Variáveis Específicas para ROI Ponderado
     double tempInvestimentoROI = 0;
     double tempEconomiaROI = 0;
     int tempCountSemInvestimento = 0;
@@ -122,11 +152,9 @@ class DashboardProvider extends ChangeNotifier {
     DateTime? dataMaisRecente;
     List<Map<String, dynamic>> listaAlertasTemp = [];
 
-    // --- LOOP DE CÁLCULOS VITALÍCIOS ---
     for (var usina in usinasParaCalcular) {
       contUsinas++;
 
-      // Filtra apenas lançamentos válidos da usina
       final lancamentosUsina = boxLancamentos.values
           .where((l) => l.usinaId == usina.id && !l.isDeletado)
           .toList();
@@ -143,34 +171,27 @@ class DashboardProvider extends ChangeNotifier {
         }
       }
 
-      // Chama a Calculadora 2.0 (Motor Central)
       final metricas = CalculadoraEnergetica.calcularMetricasGerais(
         usina,
         lancamentosUsina,
       );
 
-      // Acumula Totais Gerais (Para Cards de Economia e Geração)
       somaGeracaoTotal += metricas.totalGeradoKwh;
-      somaEconomiaTotal += metricas.valorTotalEconomizadoR; // Soma TUDO
+      somaEconomiaTotal += metricas.valorTotalEconomizadoR;
       somaSaldo += metricas.saldoCreditosEstimado;
 
-      // --- LÓGICA DE ROI PONDERADO ---
-      // Só somamos para o cálculo do ROI se a usina tiver investimento cadastrado (> 0)
       if (usina.totalInvestido > 0) {
         tempInvestimentoROI += usina.totalInvestido;
         tempEconomiaROI += metricas.valorTotalEconomizadoR;
       } else {
-        // Ignora Beneficiárias no contador de erro do ROI
         if (usina.isGeradora) {
           tempCountSemInvestimento++;
         }
       }
-      // -------------------------------
 
       if (usina.isGeradora) {
         somaPotenciaNominal += usina.potenciaTotalPaineisKwp;
 
-        // Soma da Distribuição Real
         if (usina.beneficiarias.isNotEmpty) {
           for (var lancamento in lancamentosUsina) {
             somaDistribuidaReal +=
@@ -190,12 +211,10 @@ class DashboardProvider extends ChangeNotifier {
       }
     }
 
-    // Média de eficiência global ponderada pela potência
     eficienciaGlobalMedia = somaPotenciaNominal > 0
         ? (somaEficienciaPonderada / somaPotenciaNominal)
         : 100.0;
 
-    // --- LOOP DE CÁLCULO MENSAL E ALERTAS ---
     double somaGeracaoMes = 0;
     double somaConsumoMes = 0;
     String nomeMes = "Sem dados";
@@ -225,21 +244,15 @@ class DashboardProvider extends ChangeNotifier {
         );
 
         if (lancamentoMes.usinaId.isNotEmpty) {
-          // =========================================================
-          // A MÁGICA ACONTECE AQUI: Chamamos a Fonte Única de Verdade
-          // =========================================================
           final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
             usina,
             lancamentoMes,
           );
 
           if (_usinaSelecionada == null) {
-            // Se for Visão Global: Soma a produção pura e o consumo total
             somaGeracaoMes += resumo.geracaoTotal;
             somaConsumoMes += resumo.consumoRealLocal;
           } else {
-            // Se for Visão Individual (Aba específica da usina):
-            // Mostra a Geração se for mãe, ou o que Recebeu se for filha
             somaGeracaoMes += usina.isGeradora
                 ? resumo.geracaoTotal
                 : resumo.injetadoOuRecebido;
@@ -256,7 +269,6 @@ class DashboardProvider extends ChangeNotifier {
       }
     }
 
-    // Atribuição final dos dados
     totalGerado = somaGeracaoTotal;
     totalEconomizado = somaEconomiaTotal;
     saldoCreditosTotal = somaSaldo;
@@ -268,7 +280,6 @@ class DashboardProvider extends ChangeNotifier {
     nomeMesReferencia = nomeMes;
     alertasDoSistema = listaAlertasTemp;
 
-    // Atribuição ROI Ponderado
     _investimentoConsideradoROI = tempInvestimentoROI;
     _economiaConsideradaROI = tempEconomiaROI;
     _usinasSemInvestimentoCount = tempCountSemInvestimento;

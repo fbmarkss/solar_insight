@@ -1,15 +1,20 @@
 // Caminho: lib/services/logger_service.dart
 // Descrição: Serviço de registro de logs de atividade no Firestore para auditoria com suporte Híbrido (Stream/Future).
+// ALTERAÇÃO DESTA VERSÃO:
+//   - Campo 'plataforma' agora é dinâmico (web/android/ios/windows/macos/linux)
+//     em vez do valor fixo 'mobile' que existia antes.
+//   - Nenhuma outra função foi alterada.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, defaultTargetPlatform, TargetPlatform;
 
 class LoggerService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  /// Registra uma ação no Firestore para auditoria vinculada à empresa
+  /// Registra uma ação no Firestore para auditoria vinculada à empresa.
   Future<void> logAction(String acao, String detalhes) async {
     try {
       final user = _auth.currentUser;
@@ -26,7 +31,8 @@ class LoggerService {
         'acao': acao.toUpperCase(),
         'detalhes': detalhes,
         'dataHora': FieldValue.serverTimestamp(),
-        'plataforma': 'mobile',
+        // ✅ Agora registra corretamente onde a ação foi executada.
+        'plataforma': _plataformaAtual(),
       });
     } catch (e) {
       debugPrint("🧹 Erro ao gravar log de atividade: $e");
@@ -50,7 +56,7 @@ class LoggerService {
         .snapshots();
   }
 
-  /// NOVO: Busca ÚNICA (Para evitar Listeners persistentes onde não é necessário)
+  /// Busca ÚNICA (Para evitar Listeners persistentes onde não é necessário)
   Future<List<DocumentSnapshot>> getLogsOnce() async {
     final user = _auth.currentUser;
     if (user == null) return [];
@@ -70,6 +76,27 @@ class LoggerService {
     } catch (e) {
       debugPrint("Erro ao buscar logs (Once): $e");
       return [];
+    }
+  }
+
+  // ===========================================================================
+  // HELPER: detecta a plataforma atual do runtime
+  // ===========================================================================
+  String _plataformaAtual() {
+    if (kIsWeb) return 'web';
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return 'android';
+      case TargetPlatform.iOS:
+        return 'ios';
+      case TargetPlatform.windows:
+        return 'windows';
+      case TargetPlatform.macOS:
+        return 'macos';
+      case TargetPlatform.linux:
+        return 'linux';
+      default:
+        return 'unknown';
     }
   }
 }

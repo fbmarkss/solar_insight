@@ -1,8 +1,14 @@
 // Caminho: lib/screens/auth/register_screen.dart
 // Descrição: Tela de Cadastro com Layout Responsivo para Web/Mobile (Padrão SaaS).
+// ALTERAÇÕES DESTA VERSÃO:
+//   - Adicionado SessionManager.prepararNovaSessao() no sucesso do cadastro
+//     para garantir limpeza de Hive antes de entrar na nova conta.
+//   - Adicionado dispose() dos 4 controllers (boa prática).
+//   - UI e layout 100% preservados.
 
 import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
+import '../../services/session_manager.dart'; // ✅ NOVO
 import '../../utils/app_feedback.dart';
 import '../../screens/main_navigation_screen.dart';
 
@@ -25,6 +31,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // Variáveis para controlar a visibilidade das senhas
   bool _senhaVisivel = false;
   bool _confirmaVisivel = false;
+
+  @override
+  void dispose() {
+    _nomeController.dispose();
+    _emailController.dispose();
+    _senhaController.dispose();
+    _confirmaController.dispose();
+    super.dispose();
+  }
 
   Future<void> _cadastrar() async {
     FocusScope.of(context).unfocus();
@@ -64,6 +79,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (erro == null) {
         // FEEDBACK VISÍVEL: Mostra a mensagem e espera o usuário ler
         AppFeedback.show(context, "Conta criada com sucesso! Bem-vindo.");
+
+        // ✅ Limpa qualquer resíduo do usuário anterior ANTES de entrar
+        //    na nova sessão. Evita "contaminação" de dados na Web.
+        await SessionManager.prepararNovaSessao();
 
         await Future.delayed(const Duration(seconds: 2));
 

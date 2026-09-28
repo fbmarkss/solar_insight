@@ -1,9 +1,17 @@
 // Caminho: lib/services/auth_service.dart
 // Descrição: Serviço de Autenticação com Warm-up de permissões e Cadastro Inteligente (Freemium).
+// ALTERAÇÕES DESTA VERSÃO:
+//   - logout() agora aceita BuildContext? opcional.
+//     * Com contexto  → chama SessionManager.logout(context) = limpeza total + sync pré-logout.
+//     * Sem contexto  → faz apenas FirebaseAuth.signOut() (fallback seguro).
+//   - Nenhuma outra função foi alterada (login, cadastrar, recuperarSenha, _traduzirErro).
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
+//import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart'; // Necessário para o tipo BuildContext
+
+import 'session_manager.dart'; // SessionManager (logout centralizado)
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -11,7 +19,9 @@ class AuthService {
 
   User? get currentUser => _auth.currentUser;
 
-  // --- LOGIN COM WARM-UP DE PERMISSÕES ---
+  // ===========================================================================
+  // LOGIN COM WARM-UP DE PERMISSÕES
+  // ===========================================================================
   Future<String?> login(String email, String password) async {
     try {
       UserCredential userCredential = await _auth.signInWithEmailAndPassword(
@@ -46,7 +56,9 @@ class AuthService {
     }
   }
 
-  // --- CADASTRO INTELIGENTE (RESTAURADO E PROTEGIDO COM PLANO) ---
+  // ===========================================================================
+  // CADASTRO INTELIGENTE (Freemium + Convites)
+  // ===========================================================================
   Future<String?> cadastrar(String nome, String email, String password) async {
     try {
       final emailLimpo = email.trim().toLowerCase();
@@ -105,7 +117,7 @@ class AuthService {
         'lastSync': FieldValue.serverTimestamp(),
         'role': roleDefinida,
         'empresaId': finalEmpresaId,
-        'plano': 'gratis', // <--- NOVA ETIQUETA INSERIDA AQUI
+        'plano': 'gratis', // Etiqueta inicial do plano
       });
 
       // 4. ATUALIZA STATUS DO CONVITE (se houver)
@@ -125,6 +137,9 @@ class AuthService {
     }
   }
 
+  // ===========================================================================
+  // RECUPERAÇÃO DE SENHA
+  // ===========================================================================
   Future<String?> recuperarSenha(String email) async {
     try {
       await _auth.sendPasswordResetEmail(email: email.trim());
@@ -136,10 +151,34 @@ class AuthService {
     }
   }
 
-  Future<void> logout() async {
-    await _auth.signOut();
+  // ===========================================================================
+  // LOGOUT CENTRALIZADO
+  // ===========================================================================
+  /// Logout com duas modalidades:
+  ///
+  ///   • `AuthService().logout(context)` → fluxo COMPLETO via SessionManager:
+  ///        sync best-effort → limpa Hive → reset Providers → reset motor → signOut.
+  ///        ✅ Use esta versão SEMPRE que possível.
+  ///
+  ///   • `AuthService().logout()`         → fallback simples: só `signOut()`.
+  ///        ⚠️ Não limpa Hive nem reseta Providers. Use apenas quando o contexto
+  ///        não estiver acessível (callbacks assíncronos profundos, etc.).
+  Future<void> logout([BuildContext? context]) async {
+    if (context != null && context.mounted) {
+      // Caminho preferencial: limpeza total + sync pré-logout
+      await SessionManager.logout(context);
+    } else {
+      // Fallback: apenas desloga do Firebase
+      debugPrint(
+        '⚠️ [AuthService] logout() sem contexto — apenas signOut() será executado.',
+      );
+      await _auth.signOut();
+    }
   }
 
+  // ===========================================================================
+  // TRADUTOR DE ERROS
+  // ===========================================================================
   String _traduzirErro(String code) {
     switch (code) {
       case 'user-not-found':

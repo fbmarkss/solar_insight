@@ -1,5 +1,11 @@
 // Caminho: lib/services/sincronizacao_service.dart
 // Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA, Rateios e Créditos de Terceiros), Garbage Collector Agressivo.
+// ALTERAÇÕES DESTA VERSÃO:
+//   - resetMotorReativo()  → cancela listeners e zera flags estáticas (uso no logout)
+//   - dispararSyncEmergencial() → sync best-effort (uso no ciclo de vida do app)
+//   - Proteções Hive.isBoxOpen() em _dispararSyncSilencioso e sincronizarTudo
+//     → elimina erros "HiveError: This object is currently not in a box"
+//       e "IDBDatabase connection is closing" na Web.
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -48,11 +54,36 @@ class SincronizacaoService {
     _dispararSyncSilencioso();
   }
 
+  /// Reset total do motor reativo. Chamar no logout para liberar
+  /// assinaturas de connectivity e flags estáticas.
+  static Future<void> resetMotorReativo() async {
+    await _conexaoSub?.cancel();
+    _conexaoSub = null;
+    _isSyncing = false;
+    isPaused = false;
+    SyncQueueService.onQueueUpdated = null;
+    debugPrint('🔄 [MOTOR] Reset completo do motor reativo.');
+  }
+
+  /// Sync de emergência: dispara sem bloquear. Usado no ciclo de vida do app
+  /// (background/fechamento) e no pré-logout. Fire-and-forget.
+  static void dispararSyncEmergencial() {
+    // Fire-and-forget: NÃO await. O SO pode matar o processo a qualquer momento.
+    unawaited(_dispararSyncSilencioso());
+  }
+
   static Future<void> _dispararSyncSilencioso() async {
     if (_isSyncing || isPaused) return;
 
     _isSyncing = true;
     try {
+      // ⚠️ PROTEÇÃO WEB: se as boxes não estão abertas, aborta.
+      // Evita "HiveError: This object is currently not in a box" e
+      // "IDBDatabase connection is closing" em transições de sessão.
+      if (!Hive.isBoxOpen('usinas') || !Hive.isBoxOpen('lancamentos')) {
+        debugPrint('⏸️ [MOTOR] Boxes fechadas. Abortando sync silencioso.');
+        return;
+      }
       await SincronizacaoService().sincronizarTudo();
     } catch (e) {
       debugPrint('🔇 [MOTOR ERRO] Falha silenciosa: $e');
@@ -69,6 +100,13 @@ class SincronizacaoService {
     if (isPaused) {
       debugPrint('--- ⏸️ [SYNC] Sincronização Pausada pelo Usuário. ---');
       return 'Erro: Sincronização pausada pelo usuário.';
+    }
+
+    // ⚠️ PROTEÇÃO WEB: se as boxes não estão abertas, aborta.
+    // Crítico para o fluxo de logout (SessionManager limpa antes do signOut).
+    if (!Hive.isBoxOpen('usinas') || !Hive.isBoxOpen('lancamentos')) {
+      debugPrint('⏸️ [SYNC] Boxes fechadas. Abortando.');
+      return 'Boxes fechadas.';
     }
 
     final user = _auth.currentUser;
@@ -151,11 +189,11 @@ class SincronizacaoService {
               .doc(usina.idRemoto)
               .get();
 
-          // FAXINA AGRESSIVA LOCAL: Se a usina sumiu da nuvem (Garbage Collector atuou), mato localmente.
+          // FAXINA AGRESSIVA LOCAL: Se a usina sumiu da nuvem, mato localmente.
           if (!docSnapshot.exists) {
             await usina.delete();
             await SyncQueueService.remove('usinas', usina.id);
-            continue; // Pula para a próxima usina do loop
+            continue;
           }
         }
 
@@ -267,7 +305,6 @@ class SincronizacaoService {
             ? _firestore.collection('lancamentos').doc()
             : _firestore.collection('lancamentos').doc(l.idRemoto);
 
-        // AGORA USAMOS A FUNÇÃO DE MAP INVERSO PARA GARANTIR OS CAMPOS DA IA
         var map = _lancamentoToMap(l, empresaId);
         if (l.idRemoto == null) map['criadoPor'] = userId;
 
@@ -463,7 +500,6 @@ class SincronizacaoService {
               'nome': b.nome,
               'idUsinaFilha': b.idUsinaFilha,
               'percentual': b.percentual,
-              // --- NOVOS CAMPOS PARA SINCRONIZAÇÃO NO FIRESTORE ---
               'dataInicio': b.dataInicio.millisecondsSinceEpoch,
               'dataFim': b.dataFim?.millisecondsSinceEpoch,
             },
@@ -517,7 +553,6 @@ class SincronizacaoService {
               nome: b['nome'] ?? '',
               idUsinaFilha: b['idUsinaFilha'] ?? '',
               percentual: (b['percentual'] as num).toDouble(),
-              // --- LEITURA DO FIRESTORE (Com proteção para cadastros antigos) ---
               dataInicio: b['dataInicio'] != null
                   ? _converterParaDateTime(b['dataInicio'])
                   : DateTime(2000, 1, 1),
@@ -564,8 +599,6 @@ class SincronizacaoService {
       'editadoPor': l.editadoPor,
       'ultimaAtualizacao': FieldValue.serverTimestamp(),
       'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
-
-      // --- OS DOIS NOVOS CAMPOS ADICIONADOS AQUI ---
       'creditosRecebidosDeTerceiros': l.creditosRecebidosDeTerceiros,
       'saldoAnteriorFatura': l.saldoAnteriorFatura,
 
@@ -657,7 +690,6 @@ class SincronizacaoService {
     l.ultimaModificacao = lNuvem.ultimaModificacao;
     l.saldoInformadoNaFatura = lNuvem.saldoInformadoNaFatura;
 
-    // --- ATUALIZANDO OS DOIS NOVOS CAMPOS ---
     l.creditosRecebidosDeTerceiros = lNuvem.creditosRecebidosDeTerceiros;
     l.saldoAnteriorFatura = lNuvem.saldoAnteriorFatura;
 
