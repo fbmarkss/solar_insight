@@ -93,7 +93,7 @@ class ClimaService {
     // Cache de 15 minutos (ignorado se o usuário pesquizar uma nova cidade manualmente)
     if (cidadeManual == null && _ultimoSucesso != null) {
       if (DateTime.now().difference(_ultimoSucesso!).inMinutes < 15) {
-        debugPrint('🌩️ [SERVIÇO] Usando cache recente da memória.');
+        debugPrint('🌩️ [SERVIÇO] Usando cache recente da memória para clima.');
         return _climaAtualCache;
       }
     }
