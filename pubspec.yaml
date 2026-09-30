@@ -58,11 +58,11 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   
-  # Declarar a pasta de assets para o Flutter encontrar o logo
+  # Declarar a pasta de assets para o Flutter encontrar o logo e o .env
   assets:
     - assets/logo.png
     - assets/logoweb.png
-    - assets/geminiapp/gemini.txt
+    - .env
 
 # ==========================================
 # CONFIGURAÇÃO DO ÍCONE DO APP E WEB

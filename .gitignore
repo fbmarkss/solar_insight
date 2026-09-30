@@ -43,3 +43,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# ==========================================
+# ARQUIVOS DE AMBIENTE E SEGURANÇA (NOVO)
+# ==========================================
+# Bloqueia o envio de variáveis de ambiente e chaves secretas para o GitHub
+.env
+.env*

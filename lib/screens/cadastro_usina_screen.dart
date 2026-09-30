@@ -34,7 +34,13 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   final _nomeController = TextEditingController();
   final _ucController = TextEditingController();
 
-  final List<String> _opcoesConcessionaria = ['Santa Maria', 'EDP', 'Outra'];
+  // ATUALIZAÇÃO: Neoenergia Coelba adicionada à lista de concessionárias suportadas.
+  final List<String> _opcoesConcessionaria = [
+    'Santa Maria',
+    'EDP',
+    'Neoenergia Coelba',
+    'Outra',
+  ];
   String _concessionaria = 'Santa Maria';
   String _tipoSelecionado = tipoGeradora;
 

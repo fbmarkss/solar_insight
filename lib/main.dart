@@ -31,7 +31,10 @@ import 'screens/main_navigation_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await dotenv.load(fileName: "assets/geminiapp/gemini.txt");
+  // ✅ CORREÇÃO DE SEGURANÇA:
+  // O aplicativo agora lê as chaves do ficheiro seguro '.env' na raiz do projeto,
+  // e não mais da pasta 'assets' que era enviada para o GitHub.
+  await dotenv.load(fileName: ".env");
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 

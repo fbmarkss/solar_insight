@@ -39,7 +39,7 @@ class GeminiService {
       ];
 
       // =======================================================================
-      // PROMPT SNIPER: Otimizado para EDP (Grupos A e B) e Santa Maria (Grupo B)
+      // PROMPT SNIPER: Otimizado para EDP, Santa Maria e Neoenergia Coelba
       // =======================================================================
       const promptText = r'''
 Você é um Engenheiro Eletricista e Auditor especialista em faturamento de energia e regulamentação da ANEEL (Brasil), com foco em Geração Distribuída (Lei 14.300).
@@ -49,34 +49,37 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido.
 REGRAS RÍGIDAS DE EXTRAÇÃO:
 
 1. CLASSIFICAÇÃO DA USINA E CONCESSIONÁRIA:
-- Identifique a concessionária (EDP ou Santa Maria).
+- Identifique a concessionária (EDP, Santa Maria ou Neoenergia Coelba).
 - Identifique o Grupo Tarifario. ATENÇÃO: Contas com Tensão Nominal igual ou superior a 13.800V ou 13.8kV, ou que possuam as palavras "Subgrupo A4" ou "Grupo A", SÃO OBRIGATORIAMENTE GRUPO A. Todo o resto é Grupo B.
 
 2. CONSUMO REAL (kWh):
 - 🚨 NUNCA utilize valores das seções de "Medidor", "Número do Medidor" ou "Detalhes de Leitura" onde houver avisos de "Perdas de Transformação" (ex: 2.5%). Fique atento para nunca confundir o número de série do medidor (ex: 1586662) com valores de consumo.
-- 🚨 Se SANTA MARIA: Vá OBRIGATORIAMENTE no quadro "GRANDEZAS MEDIDAS". Olhe apenas e exclusivamente a coluna "VALOR MEDIDO". Nunca pegue os valores das colunas "LEITURA ATUAL" ou "LEITURA ANTERIOR". Some EXCLUSIVAMENTE os valores numéricos das linhas que começam com "Energia ativa consumo" e "Energia ativa consumo horário reservado" (ou equivalente de consumo). Lance a soma em "unico". É PROIBIDO ler o "Histórico de Faturamento".
+- 🚨 Se SANTA MARIA: Vá OBRIGATORIAMENTE no quadro "Grandezas" ou "GRANDEZAS MEDIDAS". Olhe apenas e exclusivamente a coluna "VALOR MEDIDO" ou "Valor medido". Nunca pegue os valores das colunas "LEITURA ATUAL" ou "LEITURA ANTERIOR". Some EXCLUSIVAMENTE os valores numéricos das linhas que começam com "Energia ativa consumo" e "Energia ativa consumo horário reservado" (ou equivalente de consumo). Lance a soma em "unico". É PROIBIDO ler o "Histórico de Faturamento".
 - Se EDP GRUPO A: Busque EXCLUSIVAMENTE no quadro "DETALHES DE FATURAMENTO". Extraia a quantidade (kWh) das linhas "Energia Ativa Fornecida Ponta", "Energia Ativa Fornecida Fora Ponta" e "Energia Ativa Fornecida Reservado".
 - Se EDP GRUPO B: Busque no quadro "Detalhes do faturamento". Some as quantidades de todas as linhas que contenham "Energia Ativa Fornecida" e lance em "unico".
+- Se NEOENERGIA COELBA: Busque no quadro "MEDIDOR GRANDEZAS" na linha "Energia Ativa" na coluna "CONSUMO kWh" ou some as quantidades das linhas "Consumo-TUSD" e "Consumo-TE" no quadro "ITENS DA FATURA". Lance em "unico".
 
 3. ENERGIA INJETADA (kWh) - A REGRA DE OURO:
 - 🚨 PROIBIDO: NUNCA pegue valores das linhas de faturamento com palavras como "Inj. mUC", "Consumo SCEE" ou valores negativos (-). Isso é compensação financeira, não injeção física.
-- Se SANTA MARIA: Procure EXCLUSIVAMENTE no quadro "GRANDEZAS MEDIDAS" na coluna "VALOR MEDIDO". A injeção física é o "VALOR MEDIDO" da linha "Energia ativa injetada". Nunca utilize a "LEITURA ATUAL" desta linha.
+- Se SANTA MARIA: Procure EXCLUSIVAMENTE no quadro "Grandezas" ou "GRANDEZAS MEDIDAS" na coluna "VALOR MEDIDO" ou "Valor medido". A injeção física é o valor da linha "Energia ativa injetada". Nunca utilize a "LEITURA ATUAL" desta linha.
 - Se EDP GRUPO B: Procure EXCLUSIVAMENTE no quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA" a linha "Energia Injetada no mês".
 - Se EDP GRUPO A: Procure no quadro "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO DISTRIBUÍDA". Extraia "Energia Injetada Ponta", "Energia Injetada Fora Ponta" e "Energia Injetada Reservado". Se não houver separação, coloque o valor total em "unico".
+- Se NEOENERGIA COELBA: Procure EXCLUSIVAMENTE no quadro "INFORMAÇÕES IMPORTANTES" a linha "MMGD Energia injetada no mes". Extraia o valor numérico para "unico".
 
 4. TARIFAS E VALORES (R$ e R$/kWh):
 - Tarifas EDP GRUPO A: Busque no quadro "DETALHES DE FATURAMENTO" as linhas escritas EXATAMENTE "Tarifa ANEEL TUSD/TE Ponta" e "Tarifa ANEEL TUSD/TE FPonta".
-- Tarifas GRUPO B (Santa Maria): No quadro "ITENS DA FATURA", busque OBRIGATORIAMENTE na coluna "TARIFA UNIT. (R$)". Pegue o preço unitário da linha "Consumo" ou "Consumo SCEE" (o maior preço unitário). Lance em 'teUnica' e 0.0 em 'tusdUnica'. Nunca invente valores de tarifa que não estejam impressos nessa coluna.
+- Tarifas GRUPO B (Santa Maria): No quadro "ITENS DA FATURA", busque OBRIGATORIAMENTE na coluna "TARIFA UNIT. (R$)" ou "PREÇO UNIT". Pegue o preço unitário da linha "Consumo" ou "Consumo SCEE" (o maior preço unitário). Lance em 'teUnica' e 0.0 em 'tusdUnica'. Nunca invente valores de tarifa que não estejam impressos nessa coluna.
 - Tarifas GRUPO B (EDP): No quadro "Detalhes do faturamento", extraia o preço unitário da linha "TE - Energia Ativa Fornecida" (para 'teUnica') e da linha "TUSD - Energia Ativa Fornecida" (para 'tusdUnica').
+- Tarifas GRUPO B (NEOENERGIA COELBA): No quadro "ITENS DA FATURA", extraia da coluna "TARIFA UNIT(R$)" o valor da linha "Consumo-TE" para 'teUnica' e da linha "Consumo-TUSD" para 'tusdUnica'.
 - Custos Adicionais e Multas: 
   * Se EDP GRUPO A: É EXPRESSAMENTE PROIBIDO extrair Demanda e Multas do quadro final "DETALHES DE FATURAMENTO". Você DEVE ir ao quadro das primeiras páginas que possui a coluna "Valor Total R$" (que já embute os tributos). Extraia os valores de "Demanda", "Demanda Geração", "ERE..." e "DRE..." EXCLUSIVAMENTE dessa coluna.
   * Se GRUPO B: Procure no quadro de Itens Faturados normais.
-  * Some as demandas em "demanda" e as multas em "multaReativo". Se não houver, retorne 0.0.
-- Iluminação Pública ("iluminacaoPublica"): Extraia o valor da linha "Iluminação Pública" ou "Contr. Iluminação".
-- Saldos de Crédito de Energia: Vá ao quadro de "MENSAGENS" ou "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO". Você DEVE extrair DOIS valores distintos em kWh:
-  1. Saldo Anterior ("saldoAnteriorFatura"): Localize textos como "Saldo anterior" e extraia o valor numérico (Ex: se estiver escrito "Saldo anterior 1.474,60 kWh", extraia 1474.60).
-  2. Saldo Atual ("saldoCreditosAcumuladosKwh"): Localize textos como "Saldo atual", "Saldo Total" ou "Saldo Atualizado". ATENÇÃO: A EDP costuma errar a unidade e digitar "kW" em vez de "kWh". IGNORE O ERRO e extraia o número numérico final do mês.
-🚨 PROIBIDO: NUNCA utilize valores de PIS, COFINS, Multa por atraso ou Juros.
+  * Some as demandas em "demanda". Some quaisquer valores de "Multa", "Juros de mora" ou "Atualizacao monetaria" e lance o total em "multaReativo". Se não houver, retorne 0.0.
+- Iluminação Pública ("iluminacaoPublica"): Extraia o valor da linha "Iluminação Pública", "Contr. Iluminação", "Contr Il Pub Munic" ou "Ilum. Pub. Municipal".
+- Saldos de Crédito de Energia: Vá ao quadro de "MENSAGENS", "INFORMAÇÕES SOBRE MICRO E MINIGERAÇÃO" ou "INFORMAÇÕES IMPORTANTES". Você DEVE extrair DOIS valores distintos em kWh:
+  1. Saldo Anterior ("saldoAnteriorFatura"): Localize textos como "Saldo anterior" e extraia o valor numérico. Se não houver, retorne 0.0.
+  2. Saldo Atual ("saldoCreditosAcumuladosKwh"): Localize textos como "Saldo atual", "Saldo Total", "Saldo Atualizado" ou "Saldo para o proximo ciclo". ATENÇÃO: A EDP costuma errar a unidade e digitar "kW" em vez de "kWh". IGNORE O ERRO. Na Santa Maria, pode estar na área "Reservado ao FISCO" como "Sistema de Compensação de Energia Elétrica-saldo atual".
+🚨 PROIBIDO: NUNCA utilize valores de PIS, COFINS, Multa por atraso ou Juros nas tarifas, apenas agrupe as multas em multaReativo.
 
 FORMATO DE SAÍDA OBRIGATÓRIO (NÃO USE MARKDOWN ```json, APENAS O TEXTO PURO):
 {
