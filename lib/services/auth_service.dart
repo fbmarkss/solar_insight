@@ -1,15 +1,18 @@
 // Caminho: lib/services/auth_service.dart
 // Descrição: Serviço de Autenticação com Warm-up de permissões e Cadastro Inteligente (Freemium).
+//
 // ALTERAÇÕES DESTA VERSÃO:
-//   - logout() agora aceita BuildContext? opcional.
-//     * Com contexto  → chama SessionManager.logout(context) = limpeza total + sync pré-logout.
-//     * Sem contexto  → faz apenas FirebaseAuth.signOut() (fallback seguro).
-//   - Nenhuma outra função foi alterada (login, cadastrar, recuperarSenha, _traduzirErro).
+//   1. cadastrar() agora HERDA 'plano' e 'nomeEmpresa' do DONO da empresa
+//      quando o novo usuário entra via convite. Sem isso, o colaborador
+//      nascia como 'gratis' mesmo trabalhando numa empresa PRO.
+//   2. Fallback seguro: se a leitura do dono falhar (rules/rede), usa
+//      'gratis' — nunca quebra o cadastro.
+//   3. logout() já aceitava contexto opcional — mantido.
+//   4. Nenhuma outra função foi alterada.
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-//import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart'; // Necessário para o tipo BuildContext
+import 'package:flutter/widgets.dart'; // BuildContext
 
 import 'session_manager.dart'; // SessionManager (logout centralizado)
 
@@ -59,11 +62,18 @@ class AuthService {
   // ===========================================================================
   // CADASTRO INTELIGENTE (Freemium + Convites)
   // ===========================================================================
+  /// Cria a conta. Se houver um convite pendente para o e-mail:
+  ///   - Vincula o novo usuário à empresa do convite (empresaId)
+  ///   - Herda o 'plano' do DONO (ex: 'pro')
+  ///   - Herda o 'nomeEmpresa' do DONO
+  ///   - Marca o convite como 'aceito'
+  ///
+  /// Se não houver convite: cria uma empresa própria com 'plano: gratis'.
   Future<String?> cadastrar(String nome, String email, String password) async {
     try {
       final emailLimpo = email.trim().toLowerCase();
 
-      // 1. PRIMEIRO cria o usuário no Auth para garantir permissão de leitura logada
+      // 1. Cria o usuário no Auth
       UserCredential userCredential = await _auth
           .createUserWithEmailAndPassword(
             email: emailLimpo,
@@ -75,20 +85,21 @@ class AuthService {
 
       await user.updateDisplayName(nome);
 
-      // 2. BUSCA DE CONVITE (Operação protegida)
+      // 2. Busca convite pendente (protegido)
       String roleDefinida = 'admin';
       String? empresaIdVinculada;
+      String? nomeEmpresaHerdado;
+      String planoHerdado = 'gratis';
       DocumentSnapshot? conviteDoc;
 
       try {
-        // Consulta simplificada para evitar erro de índice e permissão
         final conviteSnapshot = await _firestore
             .collection('invites')
             .where('email', isEqualTo: emailLimpo)
             .get();
 
         if (conviteSnapshot.docs.isNotEmpty) {
-          // Filtramos o status "pendente" localmente para evitar complexidade no Firestore
+          // Filtra "pendente" localmente (evita índice composto)
           final pendentes = conviteSnapshot.docs
               .where((d) => d.data()['status'] == 'pendente')
               .toList();
@@ -99,17 +110,43 @@ class AuthService {
             final dadosConvite = conviteDoc.data() as Map<String, dynamic>;
             empresaIdVinculada =
                 dadosConvite['empresaId'] ?? dadosConvite['invitedBy'];
+            nomeEmpresaHerdado = dadosConvite['nomeEmpresa'];
+
+            // ✅ NOVO: herda o plano do DONO da empresa
+            if (empresaIdVinculada != null) {
+              try {
+                final donoDoc = await _firestore
+                    .collection('users')
+                    .doc(empresaIdVinculada)
+                    .get();
+
+                if (donoDoc.exists && donoDoc.data() != null) {
+                  final dadosDono = donoDoc.data() as Map<String, dynamic>;
+                  planoHerdado = dadosDono['plano'] ?? 'gratis';
+                  // Se o convite não trouxe nomeEmpresa, herda do dono
+                  nomeEmpresaHerdado ??= dadosDono['nomeEmpresa'];
+                  debugPrint(
+                    '🤝 [AuthService] Herdando do dono: plano=$planoHerdado | empresa=$nomeEmpresaHerdado',
+                  );
+                }
+              } catch (e) {
+                // Fallback seguro: mantém 'gratis' e segue
+                debugPrint(
+                  '⚠️ [AuthService] Falha ao herdar plano do dono: $e',
+                );
+              }
+            }
           }
         }
       } catch (e) {
-        debugPrint("Aviso: Falha silenciosa ao checar convites: $e");
-        // Em caso de erro na busca, prosseguimos como admin para não travar o usuário
+        debugPrint("Aviso: Falha ao checar convites: $e");
+        // Prossegue como admin standalone para não travar cadastro
       }
 
       String finalEmpresaId = empresaIdVinculada ?? user.uid;
 
-      // 3. SALVA PERFIL NO FIRESTORE COM A NOVA ETIQUETA "GRATIS"
-      await _firestore.collection('users').doc(user.uid).set({
+      // 3. Salva perfil com plano herdado (ou grátis se sem convite)
+      final Map<String, dynamic> novoPerfil = {
         'uid': user.uid,
         'nome': nome,
         'email': emailLimpo,
@@ -117,10 +154,17 @@ class AuthService {
         'lastSync': FieldValue.serverTimestamp(),
         'role': roleDefinida,
         'empresaId': finalEmpresaId,
-        'plano': 'gratis', // Etiqueta inicial do plano
-      });
+        'plano': planoHerdado, // ✅ herdado ou gratis
+      };
 
-      // 4. ATUALIZA STATUS DO CONVITE (se houver)
+      // Só adiciona nomeEmpresa se tiver valor (evita gravar null)
+      if (nomeEmpresaHerdado != null && nomeEmpresaHerdado.isNotEmpty) {
+        novoPerfil['nomeEmpresa'] = nomeEmpresaHerdado;
+      }
+
+      await _firestore.collection('users').doc(user.uid).set(novoPerfil);
+
+      // 4. Marca convite como aceito
       if (conviteDoc != null) {
         await _firestore.collection('invites').doc(conviteDoc.id).update({
           'status': 'aceito',
@@ -155,20 +199,12 @@ class AuthService {
   // LOGOUT CENTRALIZADO
   // ===========================================================================
   /// Logout com duas modalidades:
-  ///
-  ///   • `AuthService().logout(context)` → fluxo COMPLETO via SessionManager:
-  ///        sync best-effort → limpa Hive → reset Providers → reset motor → signOut.
-  ///        ✅ Use esta versão SEMPRE que possível.
-  ///
-  ///   • `AuthService().logout()`         → fallback simples: só `signOut()`.
-  ///        ⚠️ Não limpa Hive nem reseta Providers. Use apenas quando o contexto
-  ///        não estiver acessível (callbacks assíncronos profundos, etc.).
+  ///   • `AuthService().logout(context)` → fluxo COMPLETO via SessionManager.
+  ///   • `AuthService().logout()`         → fallback simples (só signOut).
   Future<void> logout([BuildContext? context]) async {
     if (context != null && context.mounted) {
-      // Caminho preferencial: limpeza total + sync pré-logout
       await SessionManager.logout(context);
     } else {
-      // Fallback: apenas desloga do Firebase
       debugPrint(
         '⚠️ [AuthService] logout() sem contexto — apenas signOut() será executado.',
       );

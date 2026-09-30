@@ -1,11 +1,20 @@
 // Caminho: lib/screens/paywall_screen.dart
 // Descrição: Tela de Vitrine (SaaS) oferecendo o upgrade para o Plano PRO.
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. _simularCompraSucesso() agora escreve o plano no doc do DONO da empresa,
+//      não no usuário logado. Colaborador NÃO pode comprar (só o dono).
+//   2. Após o upgrade, chama SincronizacaoService.sinalizarUpgradeParaPro()
+//      para forçar upload dos dados locais antes de baixar a nuvem.
+//   3. UI atualizada para refletir a régua: colaboradores, sync e IA são PRO.
+//   4. Todo o resto permanece intacto.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/subscription_provider.dart';
+import '../services/sincronizacao_service.dart';
 import '../utils/app_feedback.dart';
 
 class PaywallScreen extends StatefulWidget {
@@ -28,34 +37,94 @@ class _PaywallScreenState extends State<PaywallScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      // Finge que está falando com a Apple/Google...
+      // 1. Pega o usuário logado e valida se é o DONO da empresa
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        if (context.mounted) {
+          AppFeedback.show(
+            context,
+            "Você precisa estar logado.",
+            isError: true,
+          );
+        }
+        return;
+      }
+
+      final meuDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+
+      if (!meuDoc.exists) {
+        if (context.mounted) {
+          AppFeedback.show(context, "Perfil não encontrado.", isError: true);
+        }
+        return;
+      }
+
+      final meusDados = meuDoc.data() as Map<String, dynamic>;
+      final empresaId = meusDados['empresaId'] ?? user.uid;
+      final isDono = empresaId == user.uid;
+
+      // 2. 🚫 BLOQUEIO: só o DONO da empresa pode fazer upgrade
+      if (!isDono) {
+        if (context.mounted) {
+          AppFeedback.show(
+            context,
+            "Apenas o administrador da empresa pode fazer upgrade. "
+            "Solicite ao dono da conta.",
+            isError: true,
+          );
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      // 3. Simula o processamento da compra
       await Future.delayed(const Duration(seconds: 2));
 
-      // Pega o utilizador logado
-      User? user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        // Vai lá no Firebase e muda a etiqueta de 'gratis' para 'pro'
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .update({'plano': 'pro'});
+      // 4. ✅ Escreve o plano no doc do DONO (que é o próprio usuário, já que isDono=true)
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(empresaId)
+          .update({'plano': 'pro'});
 
-        // Avisa o nosso Guardião local para ele destrancar as portas IMEDIATAMENTE
-        if (context.mounted) {
-          Provider.of<SubscriptionProvider>(
-            context,
-            listen: false,
-          ).atualizarPlanoForcado('pro');
-        }
+      debugPrint('🎉 [Paywall] Plano PRO gravado no doc do dono: $empresaId');
+
+      // 5. ✅ Sinaliza upgrade para o motor de sincronização:
+      //    na próxima sync, ele vai FORÇAR upload dos dados locais
+      //    ANTES de baixar a nuvem (evita perda de dados locais).
+      await SincronizacaoService.sinalizarUpgradeParaPro();
+
+      // 6. Atualiza o Provider localmente (UI reage imediatamente)
+      if (context.mounted) {
+        Provider.of<SubscriptionProvider>(
+          context,
+          listen: false,
+        ).atualizarPlanoForcado('pro');
       }
 
       if (context.mounted) {
         AppFeedback.show(
           context,
-          "🎉 Bem-vindo ao Solar Insight PRO! Todas as funções foram liberadas.",
+          "🎉 Bem-vindo ao Solar Insight PRO! Sincronizando seus dados...",
           isError: false,
         );
-        Navigator.pop(context); // Fecha a tela de vendas
+
+        // Dispara uma sync imediata (best-effort)
+        // Não bloqueia a UI: o usuário pode fechar o paywall e o motor
+        // já está com a flag `migracaoPosUpgradeAtiva` para subir tudo.
+        Future.microtask(() async {
+          try {
+            await SincronizacaoService().sincronizarTudo();
+          } catch (e) {
+            debugPrint(
+              '⚠️ [Paywall] Sync pós-upgrade falhou (será retentado): $e',
+            );
+          }
+        });
+
+        Navigator.pop(context);
       }
     } catch (e) {
       if (context.mounted) {
@@ -68,7 +137,6 @@ class _PaywallScreenState extends State<PaywallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Detecta se está num ecrã largo (Web/Tablet) para não deixar a tela gigante
     bool isWeb = MediaQuery.of(context).size.width >= 600;
 
     return Scaffold(
@@ -128,7 +196,7 @@ class _PaywallScreenState extends State<PaywallScreen> {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  "Livre-se de planilhas e limites. Tenha controle absoluto sobre a energia gerada e distribuída.",
+                  "Desbloqueie sincronização entre dispositivos, colaboradores e automação por IA.",
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 16,
@@ -138,20 +206,30 @@ class _PaywallScreenState extends State<PaywallScreen> {
                 ),
                 const SizedBox(height: 40),
 
-                // --- LISTA DE VANTAGENS ---
+                // --- LISTA DE VANTAGENS (atualizada) ---
                 _buildVantagemItem(
                   "Usinas Ilimitadas",
                   "Cadastre quantas unidades geradoras e beneficiárias precisar.",
                   Icons.all_inclusive,
                 ),
                 _buildVantagemItem(
+                  "Sincronização Automática",
+                  "Seus dados seguros na nuvem e disponíveis em qualquer dispositivo.",
+                  Icons.cloud_sync,
+                ),
+                _buildVantagemItem(
+                  "Colaboradores",
+                  "Convide sua equipe e gerencie tudo em conjunto (só o admin convida).",
+                  Icons.group_add,
+                ),
+                _buildVantagemItem(
                   "Leitura de Faturas com IA",
-                  "Chega de digitar. O sistema extrai os dados do PDF automaticamente (Em breve).",
+                  "Envie o PDF e a IA extrai tarifas, ponta, demanda e taxas em segundos.",
                   Icons.document_scanner,
                 ),
                 _buildVantagemItem(
                   "Relatórios e Gráficos Avançados",
-                  "Visualize o ROI, o balanço energético e a economia de todo o histórico.",
+                  "Visualize ROI, balanço energético e economia de todo o histórico.",
                   Icons.bar_chart,
                 ),
                 const SizedBox(height: 40),
@@ -238,6 +316,18 @@ class _PaywallScreenState extends State<PaywallScreen> {
                   child: Text(
                     "Cancele quando quiser através da sua loja de aplicativos.",
                     style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: Text(
+                    "A assinatura é da EMPRESA. Todos os colaboradores herdam o PRO.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.blueGrey.shade400,
+                      fontStyle: FontStyle.italic,
+                    ),
                   ),
                 ),
               ],

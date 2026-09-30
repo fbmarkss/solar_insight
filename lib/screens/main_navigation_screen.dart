@@ -1,6 +1,16 @@
 // Caminho: lib/screens/main_navigation_screen.dart
 // Descrição: Controlador mestre (Single Page Application na Web, Navegação Híbrida).
-// ATUALIZAÇÃO: Correção do Cadeado de Segurança para permitir acesso de utilizadores a telas comuns.
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. _inicializarProcessos() só inicia o motor reativo se a EMPRESA for PRO.
+//      No grátis, o motor nem começa (economia de bateria + zero tentativas
+//      de sync bloqueado).
+//   2. _executarSyncManual() tem guard defensivo: se grátis, abre Paywall.
+//   3. _aceitarConvite() agora herda 'plano' + 'nomeEmpresa' do dono ao
+//      vincular o usuário à nova empresa. Corrige o caso do usuário que
+//      JÁ EXISTE e aceita um convite pendente (auth_service.cadastrar não
+//      é chamado nesse fluxo).
+//   4. Todo o resto permanece intacto.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -16,6 +26,7 @@ import 'auditoria_screen.dart';
 import '../widgets/app_drawer.dart';
 import '../services/sincronizacao_service.dart';
 import '../services/dashboard_provider.dart';
+import '../services/subscription_provider.dart';
 import '../utils/app_feedback.dart';
 import '../widgets/responsive_layout.dart';
 
@@ -25,6 +36,7 @@ import 'admin/minha_equipe_screen.dart';
 import 'admin/historico_atividades_screen.dart';
 import 'configuracao_dados_screen.dart';
 import 'configuracoes_screen.dart';
+import 'paywall_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -45,12 +57,48 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   void _inicializarProcessos() async {
-    SincronizacaoService.inicializarMotorReativo();
+    // ✅ Aguarda o SubscriptionProvider resolver o plano da empresa
+    // (evita falso-negativo no cold start)
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    if (!mounted) return;
+
+    final sub = Provider.of<SubscriptionProvider>(context, listen: false);
+    if (sub.podeSincronizar()) {
+      SincronizacaoService.inicializarMotorReativo();
+      debugPrint('✅ [MainNav] Motor reativo iniciado (empresa PRO).');
+    } else {
+      debugPrint('⏸️ [MainNav] Empresa grátis. Motor reativo NÃO iniciado.');
+    }
+
     await Future.delayed(const Duration(seconds: 1));
     if (mounted) _verificarConvitesPendentes();
   }
 
   Future<void> _executarSyncManual() async {
+    // ✅ GUARD DEFENSIVO: se grátis, abre Paywall em vez de sincronizar
+    final sub = Provider.of<SubscriptionProvider>(context, listen: false);
+    if (!sub.podeSincronizar()) {
+      if (sub.isAdmin) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const PaywallScreen(
+              mensagemMotivo:
+                  "Sincronização automática entre dispositivos é uma função PRO.",
+            ),
+          ),
+        );
+      } else {
+        AppFeedback.show(
+          context,
+          "🔒 Sincronização é uma função PRO. Peça ao administrador para fazer o upgrade.",
+          isError: true,
+        );
+      }
+      return;
+    }
+
     try {
       final resultado = await SincronizacaoService().sincronizarTudo();
       if (!mounted) return;
@@ -192,26 +240,74 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     final user = _auth.currentUser;
     if (user == null) return;
     try {
-      await _firestore.collection('users').doc(user.uid).update({
+      // =======================================================================
+      // ✅ HERANÇA: busca o plano + nomeEmpresa do DONO antes de atualizar
+      // =======================================================================
+      String planoHerdado = 'gratis';
+      String? nomeEmpresaHerdado;
+
+      try {
+        final donoDoc = await _firestore
+            .collection('users')
+            .doc(novaEmpresaId)
+            .get();
+
+        if (donoDoc.exists && donoDoc.data() != null) {
+          final dadosDono = donoDoc.data() as Map<String, dynamic>;
+          planoHerdado = dadosDono['plano'] ?? 'gratis';
+          nomeEmpresaHerdado = dadosDono['nomeEmpresa'];
+          debugPrint(
+            '🤝 [MainNav] Herdando do dono: plano=$planoHerdado | nome=$nomeEmpresaHerdado',
+          );
+        }
+      } catch (e) {
+        debugPrint('⚠️ [MainNav] Falha ao ler dono (fallback gratis): $e');
+      }
+
+      // =======================================================================
+      // Atualiza o doc do usuário com herança
+      // =======================================================================
+      final Map<String, dynamic> update = {
         'empresaId': novaEmpresaId,
         'role': 'user',
-      });
+        'plano': planoHerdado, // ✅ herda
+      };
+      if (nomeEmpresaHerdado != null && nomeEmpresaHerdado.isNotEmpty) {
+        update['nomeEmpresa'] = nomeEmpresaHerdado; // ✅ herda
+      }
+
+      await _firestore.collection('users').doc(user.uid).update(update);
+
+      // Marca o convite como aceito
       await _firestore.collection('invites').doc(inviteId).update({
         'status': 'aceito',
         'dataAceite': FieldValue.serverTimestamp(),
         'userId': user.uid,
       });
 
+      // Limpa dados locais do usuário anterior (muda de contexto de empresa)
       await Hive.box<Usina>('usinas').clear();
       await Hive.box<LancamentoMensal>('lancamentos').clear();
 
       if (mounted) {
         context.read<DashboardProvider>().atualizar();
         Navigator.pop(context);
-        AppFeedback.show(context, "Bem-vindo à nova equipe! Sincronizando...");
+        AppFeedback.show(context, "Bem-vindo à nova equipe!");
       }
 
-      await SincronizacaoService().sincronizarTudo();
+      // ✅ Recarrega o plano (agora herda o do dono)
+      if (mounted) {
+        await context.read<SubscriptionProvider>().carregarPlanoDoServidor();
+      }
+
+      // ✅ Se a nova empresa for PRO, tenta sincronizar; se não, avisa
+      if (mounted) {
+        final sub = context.read<SubscriptionProvider>();
+        if (sub.podeSincronizar()) {
+          await SincronizacaoService().sincronizarTudo();
+        }
+      }
+
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) {
@@ -262,7 +358,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ? _firestore.collection('users').doc(_auth.currentUser!.uid).get()
           : null,
       builder: (context, userSnapshot) {
-        // Tela de Carregamento enquanto valida o Role
         if (userSnapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(
@@ -274,7 +369,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
         final bool isAdmin = userData?['role'] == 'admin';
 
-        // Widget de Acesso Negado (caso o usuário tente forçar um índice restrito)
         final acessoRestrito = Scaffold(
           backgroundColor: const Color(0xFFF5F7FA),
           body: Center(
@@ -317,22 +411,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 final String refreshKey =
                     "${boxUsinas.length}_${boxLancamentos.length}";
 
-                // --- MAPA DE PÁGINAS COM TRAVA DE SEGURANÇA CORRIGIDA ---
                 final List<Widget> pages = [
                   VisaoGeralScreen(key: ValueKey("visao_$refreshKey")), // 0
                   UsinasListScreen(key: ValueKey("list_$refreshKey")), // 1
                   AuditoriaScreen(key: ValueKey("audit_$refreshKey")), // 2
                   isAdmin ? const MeuPlanoScreen() : acessoRestrito, // 3
-                  // LIVERADO: Ambos os papéis têm acesso a essas duas telas!
                   const MinhaEquipeScreen(), // 4
-
                   isAdmin
                       ? const HistoricoAtividadesScreen()
                       : acessoRestrito, // 5
                   isAdmin
                       ? const ConfiguracaoDadosScreen()
                       : acessoRestrito, // 6
-                  // LIBERADO: Configurações é para todos.
                   const ConfiguracoesScreen(), // 7
                 ];
 

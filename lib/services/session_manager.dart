@@ -1,11 +1,16 @@
 // Caminho: lib/services/session_manager.dart
-// Descrição: Centraliza login/logout limpando todo o estado local (Hive, Providers,
-//            serviços estáticos) para evitar contaminação entre usuários na Web/Mobile/Windows.
-//            Também tenta sincronizar antes de deslogar (best-effort com timeout).
+// Descrição: Centraliza login/logout limpando todo o estado local.
+//
+// CORREÇÃO CRÍTICA (Web):
+//   1. signOut() movido para ANTES da limpeza do Hive.
+//      Isso faz o StreamBuilder do main.dart trocar para LoginScreen
+//      e destruir os ValueListenableBuilder que escutam as boxes.
+//   2. Delay de 300ms após signOut para dar tempo dessa troca acontecer.
+//   3. _clearBoxSafe NÃO reabre box fechada (evita InvalidStateError do IndexedDB).
+//   4. Cada limpeza de box em try/catch individual (uma falha não trava as outras).
 
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
-//import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:provider/provider.dart';
@@ -19,64 +24,72 @@ import 'sync_queue_service.dart';
 
 class SessionManager {
   /// Timeout máximo para tentar sincronizar antes do logout.
-  /// Se estourar, o logout prossegue mesmo assim.
   static const Duration _syncTimeout = Duration(seconds: 6);
 
+  /// Tempo de espera após signOut para os ValueListenableBuilder
+  /// da Web serem destruídos antes de limparmos as boxes.
+  /// Sem isso, o IndexedDB Web dispara:
+  ///   "InvalidStateError: database connection is closing"
+  static const Duration _posSignOutDelay = Duration(milliseconds: 300);
+
   // ===========================================================================
-  // LOGOUT COMPLETO (com sync best-effort antes)
+  // LOGOUT COMPLETO
   // ===========================================================================
-  /// Faz logout completo em QUALQUER plataforma (Web/Mobile/Windows).
-  ///
-  /// Ordem de execução:
-  ///   1. Pausa o motor reativo (evita concorrência)
-  ///   2. Sync best-effort com timeout curto
-  ///   3. Limpa fila de sync
-  ///   4. Limpa boxes locais (usinas, lancamentos, sync_metadata, auth_cache)
-  ///   5. Reseta providers
-  ///   6. Reset do motor reativo (cancela listeners de connectivity)
-  ///   7. signOut() no Firebase
   static Future<void> logout(BuildContext context) async {
+    // 1. Pausa o motor reativo
+    SincronizacaoService.isPaused = true;
+
+    // 2. Sync best-effort com timeout curto
+    await _tentarSyncAntesDeSair();
+
+    // 3. Reset dos providers (limpa estado de UI antes do signOut)
     try {
-      // 1. Pausa o motor para não competir com nosso sync manual
-      SincronizacaoService.isPaused = true;
-
-      // 2. SYNC BEST-EFFORT: tenta enviar pendências, mas não bloqueia mais que 6s
-      await _tentarSyncAntesDeSair();
-
-      // 3. Limpa a fila de sincronização
-      await SyncQueueService.clearAll();
-
-      // 4. Limpa TODAS as boxes de dados do usuário
-      await _clearBox<Usina>('usinas');
-      await _clearBox<LancamentoMensal>('lancamentos');
-      await _clearBox('sync_metadata');
-      // ⚠️ auth_cache também é limpo para não deixar plano/role do usuário anterior
-      await _clearBox('auth_cache');
-
-      // 5. Reseta providers (evita dashboards antigos na memória)
       if (context.mounted) {
         context.read<DashboardProvider>().reset();
         context.read<SubscriptionProvider>().reset();
       }
-
-      // 6. Reset completo do motor reativo (cancela listeners de connectivity)
-      await SincronizacaoService.resetMotorReativo();
-
-      // 7. Desloga do Firebase (dispara authStateChanges -> LoginScreen)
-      await FirebaseAuth.instance.signOut();
-
-      debugPrint('✅ [SessionManager] Logout concluído com sucesso.');
     } catch (e) {
-      debugPrint('❌ [SessionManager] Erro no logout: $e');
-      // Mesmo com erro, garante o logout do Firebase
-      try {
-        await FirebaseAuth.instance.signOut();
-      } catch (e2) {
-        debugPrint('❌ [SessionManager] Falha crítica no signOut: $e2');
-      }
-    } finally {
-      SincronizacaoService.isPaused = false;
+      debugPrint('⚠️ [SessionManager] Erro ao resetar providers: $e');
     }
+
+    // 4. signOut PRIMEIRO — antes de qualquer operação no Hive.
+    //    Isso faz o StreamBuilder trocar para LoginScreen e destruir
+    //    os ValueListenableBuilder que escutavam as boxes.
+    try {
+      await FirebaseAuth.instance.signOut();
+      debugPrint('✅ [SessionManager] Firebase signOut concluído.');
+    } catch (e) {
+      debugPrint('❌ [SessionManager] Erro no signOut: $e');
+    }
+
+    // 5. Aguarda um pouco para o Navigator/StreamBuilder trocar de tela
+    //    e os ValueListenableBuilder serem destruídos.
+    await Future.delayed(_posSignOutDelay);
+
+    // 6. Limpa fila de sync
+    try {
+      await SyncQueueService.clearAll();
+    } catch (e) {
+      debugPrint('⚠️ [SessionManager] Erro ao limpar fila: $e');
+    }
+
+    // 7. Limpa cada box individualmente (uma falha não trava as outras)
+    await _clearBoxSafe<Usina>('usinas');
+    await _clearBoxSafe<LancamentoMensal>('lancamentos');
+    await _clearBoxSafe('sync_metadata');
+    await _clearBoxSafe('auth_cache');
+
+    // 8. Reset do motor reativo (cancela listeners de connectivity)
+    try {
+      await SincronizacaoService.resetMotorReativo();
+    } catch (e) {
+      debugPrint('⚠️ [SessionManager] Erro ao resetar motor: $e');
+    }
+
+    // 9. Garante que o motor não fica travado em paused
+    SincronizacaoService.isPaused = false;
+
+    debugPrint('✅ [SessionManager] Logout concluído com sucesso.');
   }
 
   // ===========================================================================
@@ -84,7 +97,6 @@ class SessionManager {
   // ===========================================================================
   static Future<void> _tentarSyncAntesDeSair() async {
     try {
-      // Se não há fila pendente, nem tenta (economiza 6s)
       final temPendencia = await SyncQueueService.hasPendingItems();
       if (!temPendencia) {
         debugPrint(
@@ -99,7 +111,7 @@ class SessionManager {
         _syncTimeout,
         onTimeout: () {
           debugPrint(
-            '⏱️ [SessionManager] Sync estourou o timeout ($_syncTimeout). Prosseguindo.',
+            '⏱️ [SessionManager] Sync estourou timeout. Prosseguindo.',
           );
           return 'Timeout';
         },
@@ -116,14 +128,12 @@ class SessionManager {
   // ===========================================================================
   // PREPARAR NOVA SESSÃO (após login/cadastro)
   // ===========================================================================
-  /// Chamado APÓS login/cadastro bem-sucedido.
-  /// Garante que nenhum dado residual do usuário anterior persista.
   static Future<void> prepararNovaSessao() async {
     try {
       await SyncQueueService.clearAll();
-      await _clearBox<Usina>('usinas');
-      await _clearBox<LancamentoMensal>('lancamentos');
-      await _clearBox('sync_metadata');
+      await _clearBoxSafe<Usina>('usinas');
+      await _clearBoxSafe<LancamentoMensal>('lancamentos');
+      await _clearBoxSafe('sync_metadata');
       // ⚠️ NÃO limpa 'auth_cache' aqui, porque o SubscriptionProvider
       //    acabou de gravar plano/role do novo usuário nele.
       debugPrint('✅ [SessionManager] Estado local limpo para nova sessão.');
@@ -133,14 +143,21 @@ class SessionManager {
   }
 
   // ===========================================================================
-  // HELPER: limpar box com segurança
+  // HELPER: limpar box com segurança (NÃO reabre box fechada)
   // ===========================================================================
-  static Future<void> _clearBox<T>(String name) async {
+  /// Limpa a box APENAS se ela estiver aberta.
+  /// Se estiver fechada, NÃO tenta reabrir — isso evita o
+  /// "InvalidStateError: database connection is closing" no IndexedDB da Web.
+  static Future<void> _clearBoxSafe<T>(String name) async {
     try {
       if (!Hive.isBoxOpen(name)) {
-        await Hive.openBox<T>(name);
+        debugPrint(
+          '⏭️ [SessionManager] Box $name já fechada. Pulando limpeza.',
+        );
+        return;
       }
       await Hive.box<T>(name).clear();
+      debugPrint('🧹 [SessionManager] Box $name limpa.');
     } catch (e) {
       debugPrint('⚠️ [SessionManager] Falha ao limpar box $name: $e');
     }

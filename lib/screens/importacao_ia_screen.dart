@@ -1,12 +1,22 @@
 // Caminho: lib/screens/importacao_ia_screen.dart
-// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO) - Integrada com Gemini e Painel de Análise Clean.
+// Descrição: Tela Premium de Importação de Fatura via IA (Recurso PRO).
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. Fonte de verdade do plano trocada:
+//      ANTES: lia users/{uid}.plano diretamente do Firestore (bug: colaborador
+//             de empresa PRO via 'gratis' e era bloqueado).
+//      DEPOIS: usa SubscriptionProvider.isProEmpresa, que herda dinamicamente
+//              o plano do DONO da empresa.
+//   2. initState() agora chama _verificarPlanoUsuario() após o primeiro frame
+//      para garantir que o Provider já esteja disponível.
+//   3. Todo o resto permanece intacto (UI, upload, painel de análise).
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:provider/provider.dart';
 import '../models/usina.dart';
 import '../services/gemini_service.dart';
+import '../services/subscription_provider.dart';
 import 'paywall_screen.dart';
 
 class ImportacaoIaScreen extends StatefulWidget {
@@ -42,33 +52,36 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
   @override
   void initState() {
     super.initState();
-    _verificarPlanoUsuario();
+    // ✅ Usa postFrameCallback para garantir que o Provider já esteja montado
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _verificarPlanoUsuario();
+    });
   }
 
-  // Busca o plano do usuário logo ao abrir a tela
+  /// ✅ VERIFICA O PLANO VIA PROVIDER (herda do dono da empresa).
+  /// Antes lia direto do Firestore, o que bloqueava colaboradores de
+  /// empresas PRO. Agora usa a fonte única de verdade.
   Future<void> _verificarPlanoUsuario() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      try {
-        final doc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .get();
-        final data = doc.data();
+    if (!mounted) return;
 
-        bool isPro = data?['plano'] == 'pro' || data?['isPro'] == true;
+    final sub = Provider.of<SubscriptionProvider>(context, listen: false);
 
-        if (mounted) {
-          setState(() {
-            _isUsuarioPro = isPro;
-          });
-        }
-      } catch (e) {
-        debugPrint("Erro ao verificar plano: $e");
-        if (mounted) setState(() => _isUsuarioPro = false);
-      }
-    } else {
-      if (mounted) setState(() => _isUsuarioPro = false);
+    // Aguarda o SubscriptionProvider terminar de carregar o plano
+    // (evita falso-negativo quando a tela abre antes do provider resolver)
+    int tentativas = 0;
+    while (sub.isLoading && tentativas < 30) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      tentativas++;
+      if (!mounted) return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isUsuarioPro = sub.isProEmpresa;
+      });
+      debugPrint(
+        '🧠 [ImportacaoIA] Plano verificado: isProEmpresa = ${sub.isProEmpresa}',
+      );
     }
   }
 
@@ -105,7 +118,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
 
             setState(() {
               _dadosProcessados = dadosExtraidos;
-              _mostrarDebug = true; // Exibe o painel clean de revisão
+              _mostrarDebug = true;
             });
           }
         }
@@ -302,6 +315,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
                       ),
                     ),
                   ).then((_) {
+                    // ✅ Após voltar do Paywall, revalida (pode ter virado PRO)
                     _verificarPlanoUsuario();
                   });
                 },
@@ -415,7 +429,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
     }
   }
 
-  // --- NOVA INTERFACE: PAINEL DE ANÁLISE CLEAN ---
+  // --- PAINEL DE ANÁLISE CLEAN (inalterado) ---
   Widget _buildPainelAnaliseConcluida() {
     String debugText =
         _dadosProcessados!['debugLog'] ??
@@ -498,7 +512,7 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
                       style: TextStyle(
                         color: Colors.blueGrey.shade800,
                         fontSize: 13,
-                        height: 1.5, // Linhas mais espaçadas para leitura fácil
+                        height: 1.5,
                       ),
                     ),
                   ),
@@ -512,7 +526,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
           height: 55,
           child: ElevatedButton.icon(
             onPressed: () {
-              // Entrega a encomenda final de volta para o formulário
               Navigator.pop(context, _dadosProcessados);
             },
             icon: const Icon(Icons.check_circle_outline),
@@ -538,7 +551,6 @@ class _ImportacaoIaScreenState extends State<ImportacaoIaScreen> {
         Center(
           child: TextButton(
             onPressed: () {
-              // Permite ao usuário cancelar e enviar outro PDF
               setState(() {
                 _mostrarDebug = false;
                 _dadosProcessados = null;

@@ -1,5 +1,13 @@
 // Caminho: lib/screens/admin/meu_plano_screen.dart
 // Descrição: Tela de Gestão de Empresa com Paywall, Restaurar Compras e Cargo Dinâmico.
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. Diferencia DONO da empresa vs COLABORADOR.
+//   2. Só o DONO pode fazer upgrade (colaborador vê aviso para contatar admin).
+//   3. Só o DONO vê o botão "Restaurar Compras".
+//   4. Card de status mostra claramente "Gerenciado pelo administrador"
+//      quando o usuário é colaborador.
+//   5. Todo o resto permanece intacto.
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -19,12 +27,22 @@ class MeuPlanoScreen extends StatefulWidget {
 class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
   final _nomeEmpresaController = TextEditingController();
   bool _isSaving = false;
-  String _userRole = "admin"; // Para mostrar se é admin ou user
+  String _userRole = "admin";
+  String _empresaId = "";
+  String _meuUid = "";
+  bool _isDono = false;
 
   @override
   void initState() {
     super.initState();
+    _meuUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _carregarDadosEmpresa();
+  }
+
+  @override
+  void dispose() {
+    _nomeEmpresaController.dispose();
+    super.dispose();
   }
 
   Future<void> _carregarDadosEmpresa() async {
@@ -37,9 +55,14 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
         .get();
 
     if (doc.exists && mounted) {
+      final data = doc.data() as Map<String, dynamic>;
+      final empresaId = data['empresaId'] ?? user.uid;
+
       setState(() {
-        _nomeEmpresaController.text = doc.data()?['nomeEmpresa'] ?? "";
-        _userRole = doc.data()?['role'] ?? "admin"; // Puxa o cargo do banco
+        _nomeEmpresaController.text = data['nomeEmpresa'] ?? "";
+        _userRole = data['role'] ?? "admin";
+        _empresaId = empresaId;
+        _isDono = empresaId == user.uid;
       });
     }
   }
@@ -47,6 +70,16 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
   Future<void> _salvarNomeEmpresa() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+
+    // Só o dono pode alterar o nome da empresa
+    if (!_isDono) {
+      AppFeedback.show(
+        context,
+        "Apenas o administrador pode alterar o nome da empresa.",
+        isError: true,
+      );
+      return;
+    }
 
     if (_nomeEmpresaController.text.trim().isEmpty) {
       AppFeedback.show(
@@ -59,9 +92,11 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
 
     setState(() => _isSaving = true);
     try {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).update(
-        {'nomeEmpresa': _nomeEmpresaController.text.trim()},
-      );
+      // ✅ Grava no doc do dono (que é o próprio usuário, se isDono)
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_empresaId)
+          .update({'nomeEmpresa': _nomeEmpresaController.text.trim()});
 
       if (mounted) {
         AppFeedback.show(context, "Identidade da empresa atualizada!");
@@ -77,12 +112,19 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
 
   // Simula a restauração de compras exigida pelas lojas
   Future<void> _restaurarCompras() async {
+    if (!_isDono) {
+      AppFeedback.show(
+        context,
+        "Apenas o administrador pode restaurar compras.",
+        isError: true,
+      );
+      return;
+    }
+
     AppFeedback.show(context, "Verificando compras anteriores nas lojas...");
-    // Aqui no futuro chamaremos: await Purchases.restorePurchases();
     await Future.delayed(const Duration(seconds: 2));
 
     if (mounted) {
-      // Como é simulação, apenas recarregamos o plano do servidor para ver se algo mudou
       Provider.of<SubscriptionProvider>(
         context,
         listen: false,
@@ -113,10 +155,7 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
           // --- CARD DE STATUS INTEGRADO AO PROVIDER ---
           Consumer<SubscriptionProvider>(
             builder: (context, subProvider, child) {
-              return _buildStatusCard(
-                subProvider,
-                context,
-              ); // Passamos o context para abrir a modal
+              return _buildStatusCard(subProvider, context);
             },
           ),
 
@@ -149,13 +188,16 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  "Como os membros verão a sua equipe:",
-                  style: TextStyle(fontSize: 14, color: Colors.blueGrey),
+                Text(
+                  _isDono
+                      ? "Como os membros verão a sua equipe:"
+                      : "Nome da empresa (definido pelo administrador):",
+                  style: const TextStyle(fontSize: 14, color: Colors.blueGrey),
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: _nomeEmpresaController,
+                  enabled: _isDono, // ✅ Só o dono edita
                   decoration: InputDecoration(
                     labelText: "Nome Fantasia",
                     hintText: "Ex: Solar Engenharia",
@@ -164,7 +206,9 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
                       color: Colors.deepOrange,
                     ),
                     filled: true,
-                    fillColor: Colors.grey.shade50,
+                    fillColor: _isDono
+                        ? Colors.grey.shade50
+                        : Colors.grey.shade100,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                       borderSide: BorderSide(color: Colors.grey.shade200),
@@ -176,9 +220,13 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
                   width: double.infinity,
                   height: 48,
                   child: ElevatedButton(
-                    onPressed: _isSaving ? null : _salvarNomeEmpresa,
+                    onPressed: (_isSaving || !_isDono)
+                        ? null
+                        : _salvarNomeEmpresa,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepOrange,
+                      backgroundColor: _isDono
+                          ? Colors.deepOrange
+                          : Colors.grey.shade300,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -194,9 +242,11 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
                               strokeWidth: 2,
                             ),
                           )
-                        : const Text(
-                            "SALVAR ALTERAÇÕES",
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                        : Text(
+                            _isDono
+                                ? "SALVAR ALTERAÇÕES"
+                                : "SOMENTE ADMIN PODE ALTERAR",
+                            style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                   ),
                 ),
@@ -205,11 +255,13 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
           ),
 
           const SizedBox(height: 40),
-          const Center(
+          Center(
             child: Text(
-              "Esta identidade será exibida nos convites e no cabeçalho dos seus funcionários.",
+              _isDono
+                  ? "Esta identidade será exibida nos convites e no cabeçalho dos seus funcionários."
+                  : "A identidade da empresa é gerenciada pelo administrador da conta.",
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+              style: const TextStyle(color: Colors.grey, fontSize: 12),
             ),
           ),
         ],
@@ -217,19 +269,29 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
     );
   }
 
+  // ===========================================================================
+  // CARD DE STATUS
+  // ===========================================================================
   Widget _buildStatusCard(
     SubscriptionProvider subProvider,
     BuildContext context,
   ) {
-    bool isPro = subProvider.isPro;
-    String nomePlano = isPro ? "PRO" : "GRÁTIS";
-    Color corPrincipal = isPro ? Colors.green : Colors.deepOrange;
-    IconData iconePlano = isPro ? Icons.workspace_premium : Icons.verified_user;
+    final bool isPro = subProvider.isProEmpresa;
+    final String nomePlano = isPro ? "PRO" : "GRÁTIS";
+    final Color corPrincipal = isPro ? Colors.green : Colors.deepOrange;
+    final IconData iconePlano = isPro
+        ? Icons.workspace_premium
+        : Icons.verified_user;
 
-    // Define o texto do cargo
-    String cargoTexto = _userRole == 'admin'
+    // Texto do cargo
+    final String cargoTexto = _userRole == 'admin'
         ? "Administrador"
         : "Membro da Equipe";
+
+    // Texto de "quem gerencia"
+    final String gerenciadoPor = _isDono
+        ? "Você é o titular desta assinatura."
+        : "A assinatura é gerenciada pelo administrador da empresa.";
 
     return Container(
       padding: const EdgeInsets.all(24),
@@ -288,7 +350,41 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
             ],
           ),
 
-          if (!isPro) ...[
+          const SizedBox(height: 16),
+
+          // Nota sobre quem gerencia
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.blueGrey.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _isDono ? Icons.verified_user : Icons.info_outline,
+                  size: 16,
+                  color: Colors.blueGrey.shade600,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    gerenciadoPor,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.blueGrey.shade700,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // =================================================================
+          // GRÁTIS + DONO → Mostra aviso + botão de upgrade + restaurar
+          // =================================================================
+          if (!isPro && _isDono) ...[
             const SizedBox(height: 24),
             Container(
               padding: const EdgeInsets.all(16),
@@ -302,7 +398,7 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
                   SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      "O plano Grátis possui limites de usinas cadastradas. Faça o upgrade para remover os limites.",
+                      "O plano Grátis possui limites de usinas. Faça o upgrade para liberar sincronização, colaboradores e IA.",
                       style: TextStyle(fontSize: 12, color: Colors.brown),
                     ),
                   ),
@@ -315,7 +411,6 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
               height: 50,
               child: ElevatedButton.icon(
                 onPressed: () {
-                  // --- MUDANÇA AQUI: INTELIGÊNCIA DE NAVEGAÇÃO PARA WEB/MOBILE ---
                   bool isDesktop = MediaQuery.of(context).size.width >= 900;
 
                   if (isDesktop) {
@@ -328,8 +423,8 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
                         child: const ClipRRect(
                           borderRadius: BorderRadius.all(Radius.circular(24)),
                           child: SizedBox(
-                            width: 500, // Limita a largura do Paywall na Web
-                            height: 650, // Limita a altura
+                            width: 500,
+                            height: 650,
                             child: PaywallScreen(
                               mensagemMotivo:
                                   "Desbloqueie todo o poder da sua gestão solar!",
@@ -367,17 +462,56 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
             ),
           ],
 
-          const SizedBox(height: 16),
-          // Botão Restaurar Compras (Obrigatório Apple/Google)
-          SizedBox(
-            width: double.infinity,
-            child: TextButton.icon(
-              onPressed: _restaurarCompras,
-              icon: const Icon(Icons.restore, size: 18),
-              label: const Text("Restaurar Compras Anteriores"),
-              style: TextButton.styleFrom(foregroundColor: Colors.blueGrey),
+          // =================================================================
+          // GRÁTIS + COLABORADOR → Aviso para contatar admin
+          // =================================================================
+          if (!isPro && !_isDono) ...[
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.lock_outline,
+                    color: Colors.amber.shade800,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      "Sua empresa está no plano Grátis. Peça ao administrador para fazer o upgrade e liberar todos os recursos.",
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.black87,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
+          ],
+
+          // =================================================================
+          // PRO + DONO → Mostra restaurar compras
+          // =================================================================
+          if (isPro && _isDono) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton.icon(
+                onPressed: _restaurarCompras,
+                icon: const Icon(Icons.restore, size: 18),
+                label: const Text("Restaurar Compras Anteriores"),
+                style: TextButton.styleFrom(foregroundColor: Colors.blueGrey),
+              ),
+            ),
+          ],
         ],
       ),
     );

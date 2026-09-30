@@ -1,4 +1,10 @@
 // Caminho: lib/services/clima_service.dart
+//
+// CORREÇÃO:
+//   1. Removido o debugPrint '🌩️ Busca em andamento' que poluía o console
+//      em loop quando o flag _buscandoClima ficava preso.
+//   2. Adicionado timeout no while de espera para não travar infinitamente.
+//   3. Cache de 15 min mantido — apenas não logamos mais.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -6,7 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:hive_flutter/hive_flutter.dart';
 
 class ClimaService {
-  // Padrão Singleton: Garante que apenas uma instância deste serviço exista na memória
+  // Padrão Singleton
   static final ClimaService _instancia = ClimaService._interno();
   factory ClimaService() => _instancia;
   ClimaService._interno();
@@ -81,19 +87,26 @@ class ClimaService {
 
   // --- BUSCA CLIMA REAL ---
   Future<Map<String, dynamic>> buscarClimaReal({String? cidadeManual}) async {
-    // Bloqueio Anti-Spam com Sala de Espera
+    // Bloqueio Anti-Spam com Sala de Espera (com timeout máximo)
     if (_buscandoClima) {
-      debugPrint('🌩️ [SERVIÇO] Busca em andamento. Aguardando...');
+      // ⏱️ Timeout curto: se o flag ficar preso por mais de 10s,
+      // libera e retorna o cache atual em vez de travar o app.
+      final inicio = DateTime.now();
       while (_buscandoClima) {
         await Future.delayed(const Duration(milliseconds: 500));
+        if (DateTime.now().difference(inicio).inSeconds > 10) {
+          // Flag preso — força liberação
+          _buscandoClima = false;
+          break;
+        }
       }
       return _climaAtualCache;
     }
 
-    // Cache de 15 minutos (ignorado se o usuário pesquizar uma nova cidade manualmente)
+    // Cache de 15 minutos (ignorado se o usuário pesquisar cidade manualmente)
     if (cidadeManual == null && _ultimoSucesso != null) {
       if (DateTime.now().difference(_ultimoSucesso!).inMinutes < 15) {
-        debugPrint('🌩️ [SERVIÇO] Usando cache recente da memória para clima.');
+        // ✅ Cache válido — retorna silenciosamente (sem log)
         return _climaAtualCache;
       }
     }
@@ -194,8 +207,7 @@ class ClimaService {
       debugPrint('❌ Erro no Serviço de Clima: $e');
       _definirClimaIndisponivel();
     } finally {
-      _buscandoClima =
-          false; // Destranca a porta independentemente do resultado
+      _buscandoClima = false; // Destranca a porta
     }
 
     return _climaAtualCache;

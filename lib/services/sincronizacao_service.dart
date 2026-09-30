@@ -1,11 +1,13 @@
 // Caminho: lib/services/sincronizacao_service.dart
-// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado (IA, Rateios e Créditos de Terceiros), Garbage Collector Agressivo.
+// Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado, Garbage Collector Agressivo.
+//
 // ALTERAÇÕES DESTA VERSÃO:
-//   - resetMotorReativo()  → cancela listeners e zera flags estáticas (uso no logout)
-//   - dispararSyncEmergencial() → sync best-effort (uso no ciclo de vida do app)
-//   - Proteções Hive.isBoxOpen() em _dispararSyncSilencioso e sincronizarTudo
-//     → elimina erros "HiveError: This object is currently not in a box"
-//       e "IDBDatabase connection is closing" na Web.
+//   1. BLOQUEIO DE SYNC NO GRÁTIS: só PRO sincroniza (regra comercial).
+//   2. JANELA DE MIGRAÇÃO PÓS-UPDATE: na primeira execução desta versão,
+//      permite 1 sync completa para preservar dados legados.
+//   3. MIGRAÇÃO GRÁTIS→PRO: força upload antes de download para não perder dados.
+//   4. TODAS as proteções anteriores mantidas (Hive.isBoxOpen, resetMotorReativo,
+//      dispararSyncEmergencial, guard de logout).
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -24,6 +26,12 @@ class SincronizacaoService {
   final LoggerService _logger = LoggerService();
 
   final Duration _prazoQuarentena = const Duration(days: 30);
+
+  // ===========================================================================
+  // CHAVES DE CONTROLE NO HIVE (sync_metadata)
+  // ===========================================================================
+  static const String _kMigracaoConcluida = 'migracao_v3_concluida';
+  static const String _kMigracaoPosUpgrade = 'migracao_pos_upgrade_ativa';
 
   // ===========================================================================
   // ⚙️ MOTOR INVISÍVEL (REATIVIDADE E AUTO-START)
@@ -54,8 +62,7 @@ class SincronizacaoService {
     _dispararSyncSilencioso();
   }
 
-  /// Reset total do motor reativo. Chamar no logout para liberar
-  /// assinaturas de connectivity e flags estáticas.
+  /// Reset total do motor reativo. Chamado no logout.
   static Future<void> resetMotorReativo() async {
     await _conexaoSub?.cancel();
     _conexaoSub = null;
@@ -65,10 +72,8 @@ class SincronizacaoService {
     debugPrint('🔄 [MOTOR] Reset completo do motor reativo.');
   }
 
-  /// Sync de emergência: dispara sem bloquear. Usado no ciclo de vida do app
-  /// (background/fechamento) e no pré-logout. Fire-and-forget.
+  /// Sync de emergência (fire-and-forget) para o ciclo de vida do app.
   static void dispararSyncEmergencial() {
-    // Fire-and-forget: NÃO await. O SO pode matar o processo a qualquer momento.
     unawaited(_dispararSyncSilencioso());
   }
 
@@ -77,9 +82,6 @@ class SincronizacaoService {
 
     _isSyncing = true;
     try {
-      // ⚠️ PROTEÇÃO WEB: se as boxes não estão abertas, aborta.
-      // Evita "HiveError: This object is currently not in a box" e
-      // "IDBDatabase connection is closing" em transições de sessão.
       if (!Hive.isBoxOpen('usinas') || !Hive.isBoxOpen('lancamentos')) {
         debugPrint('⏸️ [MOTOR] Boxes fechadas. Abortando sync silencioso.');
         return;
@@ -93,17 +95,65 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
+  // 🛡️ HELPERS DE CONTROLE DE MIGRAÇÃO
+  // ===========================================================================
+  Future<Box> _getMetadataBox() async {
+    if (!Hive.isBoxOpen('sync_metadata')) {
+      await Hive.openBox('sync_metadata');
+    }
+    return Hive.box('sync_metadata');
+  }
+
+  /// Retorna `true` se a janela de migração pós-update ainda está ativa.
+  /// A janela permite 1 sync completa (independente do plano) para
+  /// preservar dados legados de usuários grátis.
+  Future<bool> _isJanelaMigracaoAtiva() async {
+    final box = await _getMetadataBox();
+    return box.get(_kMigracaoConcluida, defaultValue: false) == false;
+  }
+
+  /// Fecha a janela de migração (chama depois do primeiro sync bem-sucedido).
+  Future<void> _fecharJanelaMigracao() async {
+    final box = await _getMetadataBox();
+    await box.put(_kMigracaoConcluida, true);
+    debugPrint('🔒 [MIGRAÇÃO] Janela de migração fechada.');
+  }
+
+  /// Retorna `true` se o usuário acabou de fazer upgrade grátis→PRO
+  /// e ainda não subiu os dados locais.
+  Future<bool> _isMigracaoPosUpgradeAtiva() async {
+    final box = await _getMetadataBox();
+    return box.get(_kMigracaoPosUpgrade, defaultValue: false) == true;
+  }
+
+  /// Marca a migração pós-upgrade como concluída (chama depois do upload).
+  Future<void> _fecharMigracaoPosUpgrade() async {
+    final box = await _getMetadataBox();
+    await box.put(_kMigracaoPosUpgrade, false);
+    debugPrint('🔒 [MIGRAÇÃO] Pós-upgrade concluída.');
+  }
+
+  /// Método público para o `SubscriptionProvider` sinalizar que houve
+  /// uma mudança de plano grátis→PRO. Chama isso no momento do upgrade.
+  static Future<void> sinalizarUpgradeParaPro() async {
+    if (!Hive.isBoxOpen('sync_metadata')) {
+      await Hive.openBox('sync_metadata');
+    }
+    await Hive.box('sync_metadata').put(_kMigracaoPosUpgrade, true);
+    debugPrint('🚀 [MIGRAÇÃO] Upgrade grátis→PRO detectado. Flag ativada.');
+  }
+
+  // ===========================================================================
   // LÓGICA DE SINCRONIZAÇÃO PRINCIPAL
   // ===========================================================================
-
+  /// Retorna o resumo da sincronização OU uma mensagem de bloqueio.
+  /// O chamador deve exibir a mensagem apropriada ao usuário.
   Future<String> sincronizarTudo() async {
     if (isPaused) {
       debugPrint('--- ⏸️ [SYNC] Sincronização Pausada pelo Usuário. ---');
       return 'Erro: Sincronização pausada pelo usuário.';
     }
 
-    // ⚠️ PROTEÇÃO WEB: se as boxes não estão abertas, aborta.
-    // Crítico para o fluxo de logout (SessionManager limpa antes do signOut).
     if (!Hive.isBoxOpen('usinas') || !Hive.isBoxOpen('lancamentos')) {
       debugPrint('⏸️ [SYNC] Boxes fechadas. Abortando.');
       return 'Boxes fechadas.';
@@ -116,6 +166,55 @@ class SincronizacaoService {
         .checkConnectivity());
     if (connectivityResult.contains(ConnectivityResult.none)) {
       return 'Sem internet.';
+    }
+
+    // =========================================================================
+    // 🛡️ GUARDA DE PLANO: sync só no PRO (com 2 exceções de migração)
+    // =========================================================================
+    final bool janelaMigracaoAtiva = await _isJanelaMigracaoAtiva();
+    final bool migracaoPosUpgradeAtiva = await _isMigracaoPosUpgradeAtiva();
+
+    // Verifica o plano diretamente no Firestore (não depende do Provider,
+    // porque o Sync pode ser chamado de contextos sem Provider).
+    bool empresaPro = false;
+    try {
+      final meuDoc = await _firestore.collection('users').doc(user.uid).get();
+      final meuEmpresaId = meuDoc.data()?['empresaId'] ?? user.uid;
+      final meuPlano = meuDoc.data()?['plano'] ?? 'gratis';
+
+      if (meuEmpresaId == user.uid) {
+        // Sou dono → meu plano é o da empresa
+        empresaPro = meuPlano == 'pro';
+      } else {
+        // Sou colaborador → leio o plano do dono
+        try {
+          final donoDoc = await _firestore
+              .collection('users')
+              .doc(meuEmpresaId)
+              .get();
+          final planoDono = donoDoc.data()?['plano'] ?? 'gratis';
+          empresaPro = planoDono == 'pro';
+        } catch (e) {
+          // Falha na leitura cross-user → fallback para meu próprio plano
+          empresaPro = meuPlano == 'pro';
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ [SYNC] Falha ao verificar plano: $e');
+      // Em caso de falha, assume grátis para não vazar dados
+      empresaPro = false;
+    }
+
+    // 🛡️ EXCEÇÃO 1: janela de migração pós-update ainda aberta
+    if (!empresaPro && janelaMigracaoAtiva) {
+      debugPrint(
+        '🛡️ [SYNC] Janela de migração ativa. Permitindo 1 sync (grátis).',
+      );
+    }
+    // 🛡️ EXCEÇÃO 2: migração grátis→PRO ativa
+    else if (!empresaPro && !migracaoPosUpgradeAtiva) {
+      debugPrint('🚫 [SYNC] Empresa grátis. Sync bloqueado.');
+      return 'Sync é uma função PRO. Faça upgrade ou use Backup/Restore manual.';
     }
 
     try {
@@ -131,14 +230,43 @@ class SincronizacaoService {
       bool isAdmin =
           userDoc.data()?['isAdmin'] == true || empresaId == user.uid;
 
-      int usinasUp = await _enviarUsinasLocais(empresaId, user.uid);
-      int usinasDown = await _baixarUsinasRemotas(empresaId);
-      int lancamentosUp = await _enviarLancamentosLocais(empresaId, user.uid);
-      int lancamentosDown = await _baixarLancamentosRemotos(empresaId);
+      int usinasUp = 0;
+      int usinasDown = 0;
+      int lancamentosUp = 0;
+      int lancamentosDown = 0;
+
+      // =======================================================================
+      // 🛡️ ORDEM DE OPERAÇÕES INTELIGENTE
+      // Se a migração pós-upgrade está ativa, FORÇA upload ANTES de download.
+      // Isso garante que dados locais subam sem serem sobrescritos.
+      // =======================================================================
+      if (migracaoPosUpgradeAtiva) {
+        debugPrint(
+          '🚀 [SYNC] MODO MIGRAÇÃO: upload forçado antes do download.',
+        );
+        usinasUp = await _enviarUsinasLocais(empresaId, user.uid);
+        lancamentosUp = await _enviarLancamentosLocais(empresaId, user.uid);
+        // Só depois de subir tudo, baixa o que houver na nuvem
+        usinasDown = await _baixarUsinasRemotas(empresaId);
+        lancamentosDown = await _baixarLancamentosRemotos(empresaId);
+        // Fecha a flag de migração pós-upgrade
+        await _fecharMigracaoPosUpgrade();
+      } else {
+        // Fluxo normal: upload + download em paralelo na ordem tradicional
+        usinasUp = await _enviarUsinasLocais(empresaId, user.uid);
+        usinasDown = await _baixarUsinasRemotas(empresaId);
+        lancamentosUp = await _enviarLancamentosLocais(empresaId, user.uid);
+        lancamentosDown = await _baixarLancamentosRemotos(empresaId);
+      }
 
       int itensLimpos = 0;
       if (isAdmin) {
         itensLimpos = await _executarFaxinaInteligente(empresaId);
+      }
+
+      // Fecha a janela de migração pós-update (só na primeira sync bem-sucedida)
+      if (janelaMigracaoAtiva) {
+        await _fecharJanelaMigracao();
       }
 
       String resumo = 'Sincronizado.';
@@ -168,9 +296,8 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // USINAS
+  // USINAS (sem alterações na lógica interna)
   // ===========================================================================
-
   Future<int> _enviarUsinasLocais(String empresaId, String userId) async {
     int contador = 0;
     final box = Hive.box<Usina>('usinas');
@@ -189,7 +316,6 @@ class SincronizacaoService {
               .doc(usina.idRemoto)
               .get();
 
-          // FAXINA AGRESSIVA LOCAL: Se a usina sumiu da nuvem, mato localmente.
           if (!docSnapshot.exists) {
             await usina.delete();
             await SyncQueueService.remove('usinas', usina.id);
@@ -273,9 +399,8 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // LANÇAMENTOS (FATURAS)
+  // LANÇAMENTOS
   // ===========================================================================
-
   Future<int> _enviarLancamentosLocais(String empresaId, String userId) async {
     int contador = 0;
     final box = Hive.box<LancamentoMensal>('lancamentos');
@@ -293,7 +418,6 @@ class SincronizacaoService {
               .doc(l.idRemoto)
               .get();
 
-          // FAXINA AGRESSIVA LOCAL: Lançamento sumiu do banco? Apaga e não ressuscita.
           if (!docSnapshot.exists) {
             await l.delete();
             await SyncQueueService.remove('lancamentos', l.id);
@@ -381,9 +505,8 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // 🧠 FAXINA INTELIGENTE (Smart Garbage Collector)
+  // 🧠 FAXINA INTELIGENTE
   // ===========================================================================
-
   Future<int> _executarFaxinaInteligente(String empresaId) async {
     int totalRemovido = 0;
     final usersSnapshot = await _firestore
@@ -445,9 +568,8 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // HELPERS DE CONVERSÃO (O SEGREDO DA ESTABILIDADE)
+  // HELPERS DE CONVERSÃO (idênticos à versão anterior)
   // ===========================================================================
-
   DateTime _converterParaDateTime(dynamic valor) {
     if (valor == null) return DateTime.now();
     if (valor is Timestamp) return valor.toDate();
@@ -579,7 +701,6 @@ class SincronizacaoService {
     u.beneficiarias = usinaAtualizada.beneficiarias;
   }
 
-  // --- GARANTE QUE O UPLOAD ENVIE TODOS OS CAMPOS (INCLUINDO A IA) ---
   Map<String, dynamic> _lancamentoToMap(LancamentoMensal l, String empresaId) {
     return {
       'id': l.id,
@@ -601,8 +722,6 @@ class SincronizacaoService {
       'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
       'creditosRecebidosDeTerceiros': l.creditosRecebidosDeTerceiros,
       'saldoAnteriorFatura': l.saldoAnteriorFatura,
-
-      // --- CAMPOS DA IA ---
       'grupoTarifario': l.grupoTarifario,
       'modalidadeTarifaria': l.modalidadeTarifaria,
       'consumoPonta': l.consumoPonta,
@@ -622,7 +741,6 @@ class SincronizacaoService {
     };
   }
 
-  // --- O NOVO TRADUTOR BLINDADO DE FATURAS ---
   LancamentoMensal _mapToLancamento(Map<String, dynamic> map, String idRemoto) {
     return LancamentoMensal(
       id: map['id'],
@@ -647,13 +765,9 @@ class SincronizacaoService {
       criadoPor: map['criadoPor'],
       saldoInformadoNaFatura: (map['saldoInformadoNaFatura'] as num?)
           ?.toDouble(),
-
-      // --- LENDO OS DOIS NOVOS CAMPOS AQUI ---
       creditosRecebidosDeTerceiros:
           (map['creditosRecebidosDeTerceiros'] as num?)?.toDouble(),
       saldoAnteriorFatura: (map['saldoAnteriorFatura'] as num?)?.toDouble(),
-
-      // Campos da IA
       grupoTarifario: map['grupoTarifario'],
       modalidadeTarifaria: map['modalidadeTarifaria'],
       consumoPonta: (map['consumoPonta'] as num?)?.toDouble(),
@@ -689,11 +803,8 @@ class SincronizacaoService {
     l.isDeletado = lNuvem.isDeletado;
     l.ultimaModificacao = lNuvem.ultimaModificacao;
     l.saldoInformadoNaFatura = lNuvem.saldoInformadoNaFatura;
-
     l.creditosRecebidosDeTerceiros = lNuvem.creditosRecebidosDeTerceiros;
     l.saldoAnteriorFatura = lNuvem.saldoAnteriorFatura;
-
-    // IA
     l.grupoTarifario = lNuvem.grupoTarifario;
     l.modalidadeTarifaria = lNuvem.modalidadeTarifaria;
     l.consumoPonta = lNuvem.consumoPonta;
