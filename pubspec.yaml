@@ -62,7 +62,7 @@ flutter:
   assets:
     - assets/logo.png
     - assets/logoweb.png
-    - .env
+    - env_config.txt
 
 # ==========================================
 # CONFIGURAÇÃO DO ÍCONE DO APP E WEB

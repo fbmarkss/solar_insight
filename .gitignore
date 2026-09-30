@@ -50,3 +50,4 @@ app.*.map.json
 # Bloqueia o envio de variáveis de ambiente e chaves secretas para o GitHub
 .env
 .env*
+env_config.txt

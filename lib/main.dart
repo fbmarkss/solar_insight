@@ -34,7 +34,7 @@ void main() async {
   // ✅ CORREÇÃO DE SEGURANÇA:
   // O aplicativo agora lê as chaves do ficheiro seguro '.env' na raiz do projeto,
   // e não mais da pasta 'assets' que era enviada para o GitHub.
-  await dotenv.load(fileName: ".env");
+  await dotenv.load(fileName: "env_config.txt");
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
