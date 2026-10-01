@@ -377,7 +377,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
 
   @override
   Widget build(BuildContext context) {
-    bool isWeb = MediaQuery.of(context).size.width >= 900;
+    bool isWeb = MediaQuery.of(context).size.width >= 800;
 
     if (isWeb) {
       return Navigator(

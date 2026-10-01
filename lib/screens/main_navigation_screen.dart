@@ -2,15 +2,10 @@
 // Descrição: Controlador mestre (Single Page Application na Web, Navegação Híbrida).
 //
 // ALTERAÇÕES DESTA VERSÃO:
-//   1. _inicializarProcessos() só inicia o motor reativo se a EMPRESA for PRO.
-//      No grátis, o motor nem começa (economia de bateria + zero tentativas
-//      de sync bloqueado).
-//   2. _executarSyncManual() tem guard defensivo: se grátis, abre Paywall.
-//   3. _aceitarConvite() agora herda 'plano' + 'nomeEmpresa' do dono ao
-//      vincular o usuário à nova empresa. Corrige o caso do usuário que
-//      JÁ EXISTE e aceita um convite pendente (auth_service.cadastrar não
-//      é chamado nesse fluxo).
-//   4. Todo o resto permanece intacto.
+//   1. REMOÇÃO DEFINITIVA dos `ValueListenableBuilder` e `ValueKey` do método build.
+//      Isto impede que a sincronização em segundo plano destrua a tela do utilizador
+//      (como fechar a Importação da IA subitamente).
+//   2. A lista de páginas (pages) agora é gerada de forma estática e segura.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -50,33 +45,53 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   final _firestore = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
 
+  // Bloqueia a interface principal até os dados chegarem
+  bool _isFirstSyncLoading = true;
+
   @override
   void initState() {
     super.initState();
-    _inicializarProcessos();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _inicializarProcessos();
+    });
   }
 
   void _inicializarProcessos() async {
-    // ✅ Aguarda o SubscriptionProvider resolver o plano da empresa
-    // (evita falso-negativo no cold start)
-    await Future.delayed(const Duration(milliseconds: 500));
+    final sub = Provider.of<SubscriptionProvider>(context, listen: false);
+
+    await sub.recarregarSessaoCompleta();
 
     if (!mounted) return;
 
-    final sub = Provider.of<SubscriptionProvider>(context, listen: false);
     if (sub.podeSincronizar()) {
+      final boxUsinas = Hive.box<Usina>('usinas');
+
+      if (boxUsinas.isEmpty) {
+        debugPrint(
+          '📥 [MainNav] Banco vazio. A descarregar dados iniciais da nuvem...',
+        );
+        await SincronizacaoService().sincronizarTudo();
+
+        if (mounted) {
+          Provider.of<DashboardProvider>(context, listen: false).atualizar();
+        }
+      }
+
       SincronizacaoService.inicializarMotorReativo();
       debugPrint('✅ [MainNav] Motor reativo iniciado (empresa PRO).');
     } else {
-      debugPrint('⏸️ [MainNav] Empresa grátis. Motor reativo NÃO iniciado.');
+      debugPrint('⏸️️ [MainNav] Empresa grátis. Motor reativo NÃO iniciado.');
     }
 
-    await Future.delayed(const Duration(seconds: 1));
-    if (mounted) _verificarConvitesPendentes();
+    if (mounted) {
+      setState(() {
+        _isFirstSyncLoading = false;
+      });
+      _verificarConvitesPendentes();
+    }
   }
 
   Future<void> _executarSyncManual() async {
-    // ✅ GUARD DEFENSIVO: se grátis, abre Paywall em vez de sincronizar
     final sub = Provider.of<SubscriptionProvider>(context, listen: false);
     if (!sub.podeSincronizar()) {
       if (sub.isAdmin) {
@@ -118,11 +133,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       }
     } catch (e) {
       if (mounted) {
-        AppFeedback.show(
-          context,
-          "Erro ao conectar com a nuvem.",
-          isError: true,
-        );
+        AppFeedback.show(context, "Erro ao ligar à nuvem.", isError: true);
       }
     }
   }
@@ -162,7 +173,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         }
       }
     } catch (e) {
-      debugPrint("Erro ao checar convites: $e");
+      debugPrint("Erro ao verificar convites: $e");
     }
   }
 
@@ -197,7 +208,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              "A empresa $nomeEmpresa convidou você para fazer parte da equipe.",
+              "A empresa $nomeEmpresa convidou-o para fazer parte da equipe.",
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.grey, fontSize: 16),
             ),
@@ -239,10 +250,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   Future<void> _aceitarConvite(String inviteId, String novaEmpresaId) async {
     final user = _auth.currentUser;
     if (user == null) return;
+
     try {
-      // =======================================================================
-      // ✅ HERANÇA: busca o plano + nomeEmpresa do DONO antes de atualizar
-      // =======================================================================
       String planoHerdado = 'gratis';
       String? nomeEmpresaHerdado;
 
@@ -256,51 +265,64 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           final dadosDono = donoDoc.data() as Map<String, dynamic>;
           planoHerdado = dadosDono['plano'] ?? 'gratis';
           nomeEmpresaHerdado = dadosDono['nomeEmpresa'];
-          debugPrint(
-            '🤝 [MainNav] Herdando do dono: plano=$planoHerdado | nome=$nomeEmpresaHerdado',
-          );
         }
       } catch (e) {
-        debugPrint('⚠️ [MainNav] Falha ao ler dono (fallback gratis): $e');
+        debugPrint(
+          '⚠️ [MainNav] Leitura do dono bloqueada (regras). Fallback aplicado.',
+        );
       }
 
-      // =======================================================================
-      // Atualiza o doc do usuário com herança
-      // =======================================================================
+      if (nomeEmpresaHerdado == null) {
+        try {
+          final inviteDoc = await _firestore
+              .collection('invites')
+              .doc(inviteId)
+              .get();
+          if (inviteDoc.exists) {
+            nomeEmpresaHerdado = inviteDoc.data()?['nomeEmpresa'];
+          }
+        } catch (_) {}
+      }
+
       final Map<String, dynamic> update = {
         'empresaId': novaEmpresaId,
         'role': 'user',
-        'plano': planoHerdado, // ✅ herda
+        'plano': planoHerdado,
       };
       if (nomeEmpresaHerdado != null && nomeEmpresaHerdado.isNotEmpty) {
-        update['nomeEmpresa'] = nomeEmpresaHerdado; // ✅ herda
+        update['nomeEmpresa'] = nomeEmpresaHerdado;
       }
 
-      await _firestore.collection('users').doc(user.uid).update(update);
+      await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .set(update, SetOptions(merge: true));
 
-      // Marca o convite como aceito
-      await _firestore.collection('invites').doc(inviteId).update({
-        'status': 'aceito',
-        'dataAceite': FieldValue.serverTimestamp(),
-        'userId': user.uid,
-      });
+      try {
+        await _firestore.collection('invites').doc(inviteId).update({
+          'status': 'aceito',
+          'dataAceite': FieldValue.serverTimestamp(),
+          'userId': user.uid,
+        });
+      } catch (e) {
+        debugPrint(
+          '⚠️ [MainNav] O status do convite não pôde ser alterado: $e',
+        );
+      }
 
-      // Limpa dados locais do usuário anterior (muda de contexto de empresa)
       await Hive.box<Usina>('usinas').clear();
       await Hive.box<LancamentoMensal>('lancamentos').clear();
 
       if (mounted) {
         context.read<DashboardProvider>().atualizar();
         Navigator.pop(context);
-        AppFeedback.show(context, "Bem-vindo à nova equipe!");
+        AppFeedback.show(context, "Bem-vindo à equipe!");
       }
 
-      // ✅ Recarrega o plano (agora herda o do dono)
       if (mounted) {
         await context.read<SubscriptionProvider>().carregarPlanoDoServidor();
       }
 
-      // ✅ Se a nova empresa for PRO, tenta sincronizar; se não, avisa
       if (mounted) {
         final sub = context.read<SubscriptionProvider>();
         if (sub.podeSincronizar()) {
@@ -311,13 +333,113 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) {
-        AppFeedback.show(context, "Erro ao aceitar convite.", isError: true);
+        AppFeedback.show(context, "Erro de ligação: $e", isError: true);
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_isFirstSyncLoading) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF5F7FA),
+        body: Center(
+          child: TweenAnimationBuilder(
+            tween: Tween<double>(begin: 0.0, end: 1.0),
+            duration: const Duration(milliseconds: 800),
+            curve: Curves.easeOutCubic,
+            builder: (context, value, child) {
+              return Opacity(
+                opacity: value,
+                child: Transform.translate(
+                  offset: Offset(0, 20 * (1 - value)),
+                  child: child,
+                ),
+              );
+            },
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 450),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 48,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.blueGrey.withValues(alpha: 0.1),
+                        blurRadius: 24,
+                        offset: const Offset(0, 10),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.deepOrange.shade50,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.wb_sunny,
+                          size: 64,
+                          color: Colors.deepOrange,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        "SolarInsight",
+                        style: TextStyle(
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.deepOrange,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        "Preparando o seu ambiente...",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        "Verificando credenciais e sincronizando os seus dados com a nuvem de forma segura.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey,
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+                      const SizedBox(
+                        width: 45,
+                        height: 45,
+                        child: CircularProgressIndicator(
+                          color: Colors.deepOrange,
+                          strokeWidth: 4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final List<String> navTitulos = ['Visão Geral', 'Unidades', 'Auditoria'];
     final List<IconData> navIcones = [
       Icons.dashboard_outlined,
@@ -352,98 +474,69 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       ],
     );
 
-    // --- CADEADO MESTRA: Busca Permissões do Usuário ---
-    return FutureBuilder<DocumentSnapshot>(
-      future: _auth.currentUser != null
-          ? _firestore.collection('users').doc(_auth.currentUser!.uid).get()
-          : null,
-      builder: (context, userSnapshot) {
-        if (userSnapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(color: Colors.deepOrange),
+    // =========================================================================
+    // ✅ CORREÇÃO: Remoção dos ValueListenableBuilders (O "Assassino de Foco").
+    // As telas agora mantêm o estado independentemente das atualizações de fundo.
+    // =========================================================================
+    final subProvider = Provider.of<SubscriptionProvider>(context);
+    final bool isAdmin = subProvider.isAdmin;
+
+    final acessoRestrito = Scaffold(
+      backgroundColor: const Color(0xFFF5F7FA),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.lock_person_outlined,
+              size: 80,
+              color: Colors.grey,
             ),
-          );
-        }
-
-        final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
-        final bool isAdmin = userData?['role'] == 'admin';
-
-        final acessoRestrito = Scaffold(
-          backgroundColor: const Color(0xFFF5F7FA),
-          body: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(
-                  Icons.lock_person_outlined,
-                  size: 80,
-                  color: Colors.grey,
-                ),
-                const SizedBox(height: 24),
-                const Text(
-                  "Área Restrita",
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  "Você não tem permissão para acessar este menu.",
-                  style: TextStyle(color: Colors.grey),
-                ),
-                const SizedBox(height: 32),
-                ElevatedButton(
-                  onPressed: () => setState(() => _paginaAtual = 0),
-                  child: const Text("VOLTAR AO DASHBOARD"),
-                ),
-              ],
+            const SizedBox(height: 24),
+            const Text(
+              "Área Restrita",
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
-          ),
-        );
+            const SizedBox(height: 8),
+            const Text(
+              "Não tem permissão para acessar este menu.",
+              style: TextStyle(color: Colors.grey),
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton(
+              onPressed: () => setState(() => _paginaAtual = 0),
+              child: const Text("VOLTAR AO DASHBOARD"),
+            ),
+          ],
+        ),
+      ),
+    );
 
-        return ValueListenableBuilder(
-          valueListenable: Hive.box<Usina>('usinas').listenable(),
-          builder: (context, boxUsinas, _) {
-            return ValueListenableBuilder(
-              valueListenable: Hive.box<LancamentoMensal>(
-                'lancamentos',
-              ).listenable(),
-              builder: (context, boxLancamentos, _) {
-                final String refreshKey =
-                    "${boxUsinas.length}_${boxLancamentos.length}";
+    // ✅ As páginas agora são instanciadas de forma simples e constante,
+    // sem as ValueKeys baseadas no tamanho do banco de dados.
+    final List<Widget> pages = [
+      const VisaoGeralScreen(),
+      const UsinasListScreen(),
+      const AuditoriaScreen(),
+      isAdmin ? const MeuPlanoScreen() : acessoRestrito,
+      const MinhaEquipeScreen(),
+      isAdmin ? const HistoricoAtividadesScreen() : acessoRestrito,
+      isAdmin ? const ConfiguracaoDadosScreen() : acessoRestrito,
+      const ConfiguracoesScreen(),
+    ];
 
-                final List<Widget> pages = [
-                  VisaoGeralScreen(key: ValueKey("visao_$refreshKey")), // 0
-                  UsinasListScreen(key: ValueKey("list_$refreshKey")), // 1
-                  AuditoriaScreen(key: ValueKey("audit_$refreshKey")), // 2
-                  isAdmin ? const MeuPlanoScreen() : acessoRestrito, // 3
-                  const MinhaEquipeScreen(), // 4
-                  isAdmin
-                      ? const HistoricoAtividadesScreen()
-                      : acessoRestrito, // 5
-                  isAdmin
-                      ? const ConfiguracaoDadosScreen()
-                      : acessoRestrito, // 6
-                  const ConfiguracoesScreen(), // 7
-                ];
-
-                return ResponsiveLayout(
-                  currentIndex: _paginaAtual,
-                  onTabTapped: _navegarParaIndice,
-                  pages: pages,
-                  titulos: navTitulos,
-                  icones: navIcones,
-                  mobileAppBar: mobileAppBar,
-                  mobileDrawer: const AppDrawer(),
-                  mobileFab: null,
-                  onSyncTap: _executarSyncManual,
-                  onAdminItemTap: (index) {
-                    setState(() => _paginaAtual = index);
-                  },
-                );
-              },
-            );
-          },
-        );
+    return ResponsiveLayout(
+      currentIndex: _paginaAtual,
+      onTabTapped: _navegarParaIndice,
+      pages: pages,
+      titulos: navTitulos,
+      icones: navIcones,
+      mobileAppBar: mobileAppBar,
+      mobileDrawer: const AppDrawer(),
+      mobileFab: null,
+      onSyncTap: _executarSyncManual,
+      onAdminItemTap: (index) {
+        setState(() => _paginaAtual = index);
       },
     );
   }

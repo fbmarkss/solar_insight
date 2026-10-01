@@ -857,7 +857,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     bool isCriador = widget.usinaParaEditar?.criadoPor == _currentUid;
     bool podeExcluir = _isAdmin || isCriador;
 
-    bool isWeb = MediaQuery.of(context).size.width >= 900;
+    bool isWeb = MediaQuery.of(context).size.width >= 800;
 
     // Obtém o guardião para verificar limites na UI
     final subProvider = Provider.of<SubscriptionProvider>(context);

@@ -1,5 +1,11 @@
 // Caminho: lib/screens/usinas_list_screen.dart
-// Descrição: Lista de Usinas com Navegador Aninhado, Pull-to-Refresh, Limites de Plano e Design Aprimorado com Métricas.
+// Descrição: Lista de Usinas com Navegador Aninhado Permanente e Proteção de Estado.
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. O Navigator aninhado foi promovido à raiz absoluta do método build.
+//   2. A verificação responsiva (isWeb) ocorre agora DENTRO da rota principal.
+//      Isto garante que pequenos redimensionamentos da janela alteram o design da lista
+//      fluidamente, sem NUNCA destruir a pilha de navegação (formulários ou IA abertos).
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -63,6 +69,21 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
     }
   }
 
+  void _abrirTela(Widget tela, bool isWeb, BuildContext localContext) {
+    if (isWeb) {
+      _nestedNavKey.currentState!.push(
+        PageRouteBuilder(
+          pageBuilder: (context, animation, secondaryAnimation) => tela,
+          transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
+      );
+    } else {
+      Navigator.push(localContext, MaterialPageRoute(builder: (_) => tela));
+    }
+  }
+
   void _tentarCriarNovaUsina(bool isWeb, BuildContext localContext) {
     final subProvider = Provider.of<SubscriptionProvider>(
       localContext,
@@ -101,40 +122,25 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
     _abrirTela(const CadastroUsinaScreen(), isWeb, localContext);
   }
 
-  void _abrirTela(Widget tela, bool isWeb, BuildContext localContext) {
-    if (isWeb) {
-      _nestedNavKey.currentState!.push(
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) => tela,
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(opacity: animation, child: child);
-          },
-        ),
-      );
-    } else {
-      Navigator.push(localContext, MaterialPageRoute(builder: (_) => tela));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    bool isWeb = MediaQuery.of(context).size.width >= 900;
-
-    if (isWeb) {
-      return Navigator(
-        key: _nestedNavKey,
-        onGenerateRoute: (settings) {
-          return MaterialPageRoute(
-            builder: (context) => _buildListaConteudo(isWeb),
-          );
-        },
-      );
-    } else {
-      return _buildListaConteudo(isWeb);
-    }
+    // NAVEGADOR PERMANENTE (Raiz da Aba)
+    return Navigator(
+      key: _nestedNavKey,
+      onGenerateRoute: (settings) {
+        return MaterialPageRoute(
+          builder: (navContext) {
+            // A responsividade agora é avaliada DENTRO da rota principal.
+            // Pequenos redimensionamentos alteram a lista abaixo, mas não destroem o Navegador.
+            bool isWeb = MediaQuery.of(navContext).size.width >= 800;
+            return _buildListaConteudo(isWeb, navContext);
+          },
+        );
+      },
+    );
   }
 
-  Widget _buildListaConteudo(bool isWeb) {
+  Widget _buildListaConteudo(bool isWeb, BuildContext navContext) {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       body: ValueListenableBuilder(
@@ -143,9 +149,9 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
           final usinas = box.values.where((u) => !u.isDeletado).toList();
 
           if (isWeb) {
-            return _buildWebLayout(usinas, isWeb, context);
+            return _buildWebLayout(usinas, isWeb, navContext);
           } else {
-            return _buildMobileLayout(usinas, isWeb, context);
+            return _buildMobileLayout(usinas, isWeb, navContext);
           }
         },
       ),
@@ -161,7 +167,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              onPressed: () => _tentarCriarNovaUsina(isWeb, context),
+              onPressed: () => _tentarCriarNovaUsina(isWeb, navContext),
             ),
     );
   }
@@ -230,7 +236,6 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
             const SizedBox(height: 24),
             _buildWebSummaryRow(usinas),
 
-            // --- A BARRA DIVISÓRIA ---
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Divider(color: Colors.grey.shade300, thickness: 1),
@@ -244,8 +249,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                 physics: const NeverScrollableScrollPhysics(),
                 gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: 450,
-                  childAspectRatio:
-                      1.8, // Ajustado para acomodar mais dados no card
+                  childAspectRatio: 1.8,
                   crossAxisSpacing: 24,
                   mainAxisSpacing: 24,
                 ),
@@ -449,7 +453,6 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // Topo do Card (Ícone e Nome)
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -525,10 +528,8 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                   ],
                 ),
 
-                // Divisória sutil
                 Divider(color: Colors.grey.shade100, height: 24),
 
-                // Base do Card (Métricas Rápidas)
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -564,7 +565,7 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: const Color.fromARGB(64, 41, 157, 252)),
+        side: const BorderSide(color: Color.fromARGB(64, 41, 157, 252)),
       ),
       color: Colors.white,
       child: InkWell(

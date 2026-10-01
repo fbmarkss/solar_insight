@@ -867,7 +867,7 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
 
   @override
   Widget build(BuildContext context) {
-    bool isWeb = MediaQuery.of(context).size.width >= 900;
+    bool isWeb = MediaQuery.of(context).size.width >= 800;
     bool isGeradora = _usinaSelecionada?.isGeradora ?? true;
 
     final boxUsinas = Hive.box<Usina>('usinas');

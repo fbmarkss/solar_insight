@@ -2,12 +2,10 @@
 // Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado, Garbage Collector Agressivo.
 //
 // ALTERAÇÕES DESTA VERSÃO:
-//   1. BLOQUEIO DE SYNC NO GRÁTIS: só PRO sincroniza (regra comercial).
-//   2. JANELA DE MIGRAÇÃO PÓS-UPDATE: na primeira execução desta versão,
-//      permite 1 sync completa para preservar dados legados.
-//   3. MIGRAÇÃO GRÁTIS→PRO: força upload antes de download para não perder dados.
-//   4. TODAS as proteções anteriores mantidas (Hive.isBoxOpen, resetMotorReativo,
-//      dispararSyncEmergencial, guard de logout).
+//   1. CORREÇÃO DE SINTAXE: Substituição dos ponteiros (&) inválidos em Dart por
+//      callbacks (funções anônimas) na chamada do _buscarPermissoesFirestore.
+//   2. O motor agora lê o plano, role e empresaId diretamente do cache local.
+//   3. Atualização do `lastSync` transformada em "Fire-and-forget" (não bloqueia a thread).
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -95,7 +93,7 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // 🛡️ HELPERS DE CONTROLE DE MIGRAÇÃO
+  // 🛡️ HELPERS DE CONTROLE DE MIGRAÇÃO E CACHE
   // ===========================================================================
   Future<Box> _getMetadataBox() async {
     if (!Hive.isBoxOpen('sync_metadata')) {
@@ -104,37 +102,28 @@ class SincronizacaoService {
     return Hive.box('sync_metadata');
   }
 
-  /// Retorna `true` se a janela de migração pós-update ainda está ativa.
-  /// A janela permite 1 sync completa (independente do plano) para
-  /// preservar dados legados de usuários grátis.
   Future<bool> _isJanelaMigracaoAtiva() async {
     final box = await _getMetadataBox();
     return box.get(_kMigracaoConcluida, defaultValue: false) == false;
   }
 
-  /// Fecha a janela de migração (chama depois do primeiro sync bem-sucedido).
   Future<void> _fecharJanelaMigracao() async {
     final box = await _getMetadataBox();
     await box.put(_kMigracaoConcluida, true);
     debugPrint('🔒 [MIGRAÇÃO] Janela de migração fechada.');
   }
 
-  /// Retorna `true` se o usuário acabou de fazer upgrade grátis→PRO
-  /// e ainda não subiu os dados locais.
   Future<bool> _isMigracaoPosUpgradeAtiva() async {
     final box = await _getMetadataBox();
     return box.get(_kMigracaoPosUpgrade, defaultValue: false) == true;
   }
 
-  /// Marca a migração pós-upgrade como concluída (chama depois do upload).
   Future<void> _fecharMigracaoPosUpgrade() async {
     final box = await _getMetadataBox();
     await box.put(_kMigracaoPosUpgrade, false);
     debugPrint('🔒 [MIGRAÇÃO] Pós-upgrade concluída.');
   }
 
-  /// Método público para o `SubscriptionProvider` sinalizar que houve
-  /// uma mudança de plano grátis→PRO. Chama isso no momento do upgrade.
   static Future<void> sinalizarUpgradeParaPro() async {
     if (!Hive.isBoxOpen('sync_metadata')) {
       await Hive.openBox('sync_metadata');
@@ -144,10 +133,8 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // LÓGICA DE SINCRONIZAÇÃO PRINCIPAL
+  // LÓGICA DE SINCRONIZAÇÃO PRINCIPAL (OTIMIZADA)
   // ===========================================================================
-  /// Retorna o resumo da sincronização OU uma mensagem de bloqueio.
-  /// O chamador deve exibir a mensagem apropriada ao usuário.
   Future<String> sincronizarTudo() async {
     if (isPaused) {
       debugPrint('--- ⏸️ [SYNC] Sincronização Pausada pelo Usuário. ---');
@@ -168,91 +155,85 @@ class SincronizacaoService {
       return 'Sem internet.';
     }
 
+    debugPrint('--- 🔄 [SYNC] INICIANDO PROCESSO ---');
+
+    // =========================================================================
+    // ⚡ OTIMIZAÇÃO: LEITURA ULTRA-RÁPIDA DO CACHE LOCAL (Sem travar na Nuvem)
+    // =========================================================================
+    bool empresaPro = false;
+    String empresaId = user.uid;
+    bool isAdmin = false;
+
+    if (Hive.isBoxOpen('auth_cache')) {
+      final boxAuth = Hive.box('auth_cache');
+      final planoEmpresa = boxAuth.get('plano_empresa_salvo');
+      final empresaIdSalvo = boxAuth.get('empresa_id_salva');
+      final roleSalva = boxAuth.get('role_salva');
+
+      if (planoEmpresa != null && empresaIdSalvo != null && roleSalva != null) {
+        empresaPro = (planoEmpresa == 'pro');
+        empresaId = empresaIdSalvo;
+        isAdmin = (roleSalva == 'admin' || empresaId == user.uid);
+        debugPrint('⚡ [SYNC] Autenticação lida do cache local em 0ms!');
+      } else {
+        // ✅ CORREÇÃO: Utilizando callbacks em vez de ponteiros
+        await _buscarPermissoesFirestore(
+          user,
+          (val) => empresaPro = val,
+          (val) => empresaId = val,
+          (val) => isAdmin = val,
+        );
+      }
+    } else {
+      // ✅ CORREÇÃO: Utilizando callbacks em vez de ponteiros
+      await _buscarPermissoesFirestore(
+        user,
+        (val) => empresaPro = val,
+        (val) => empresaId = val,
+        (val) => isAdmin = val,
+      );
+    }
+
     // =========================================================================
     // 🛡️ GUARDA DE PLANO: sync só no PRO (com 2 exceções de migração)
     // =========================================================================
     final bool janelaMigracaoAtiva = await _isJanelaMigracaoAtiva();
     final bool migracaoPosUpgradeAtiva = await _isMigracaoPosUpgradeAtiva();
 
-    // Verifica o plano diretamente no Firestore (não depende do Provider,
-    // porque o Sync pode ser chamado de contextos sem Provider).
-    bool empresaPro = false;
-    try {
-      final meuDoc = await _firestore.collection('users').doc(user.uid).get();
-      final meuEmpresaId = meuDoc.data()?['empresaId'] ?? user.uid;
-      final meuPlano = meuDoc.data()?['plano'] ?? 'gratis';
-
-      if (meuEmpresaId == user.uid) {
-        // Sou dono → meu plano é o da empresa
-        empresaPro = meuPlano == 'pro';
-      } else {
-        // Sou colaborador → leio o plano do dono
-        try {
-          final donoDoc = await _firestore
-              .collection('users')
-              .doc(meuEmpresaId)
-              .get();
-          final planoDono = donoDoc.data()?['plano'] ?? 'gratis';
-          empresaPro = planoDono == 'pro';
-        } catch (e) {
-          // Falha na leitura cross-user → fallback para meu próprio plano
-          empresaPro = meuPlano == 'pro';
-        }
-      }
-    } catch (e) {
-      debugPrint('⚠️ [SYNC] Falha ao verificar plano: $e');
-      // Em caso de falha, assume grátis para não vazar dados
-      empresaPro = false;
-    }
-
-    // 🛡️ EXCEÇÃO 1: janela de migração pós-update ainda aberta
     if (!empresaPro && janelaMigracaoAtiva) {
       debugPrint(
         '🛡️ [SYNC] Janela de migração ativa. Permitindo 1 sync (grátis).',
       );
-    }
-    // 🛡️ EXCEÇÃO 2: migração grátis→PRO ativa
-    else if (!empresaPro && !migracaoPosUpgradeAtiva) {
+    } else if (!empresaPro && !migracaoPosUpgradeAtiva) {
       debugPrint('🚫 [SYNC] Empresa grátis. Sync bloqueado.');
       return 'Sync é uma função PRO. Faça upgrade ou use Backup/Restore manual.';
     }
 
     try {
-      debugPrint('--- 🔄 [SYNC] INICIANDO PROCESSO ---');
-
-      await _firestore.collection('users').doc(user.uid).set({
-        'lastSync': FieldValue.serverTimestamp(),
-        'email': user.email,
-      }, SetOptions(merge: true));
-
-      final userDoc = await _firestore.collection('users').doc(user.uid).get();
-      String empresaId = userDoc.data()?['empresaId'] ?? user.uid;
-      bool isAdmin =
-          userDoc.data()?['isAdmin'] == true || empresaId == user.uid;
+      // ⚡ OTIMIZAÇÃO: Fire-and-forget. Regista o LastSync no fundo, não bloqueia o fluxo!
+      unawaited(
+        _firestore.collection('users').doc(user.uid).set({
+          'lastSync': FieldValue.serverTimestamp(),
+          'email': user.email,
+        }, SetOptions(merge: true)),
+      );
 
       int usinasUp = 0;
       int usinasDown = 0;
       int lancamentosUp = 0;
       int lancamentosDown = 0;
 
-      // =======================================================================
-      // 🛡️ ORDEM DE OPERAÇÕES INTELIGENTE
-      // Se a migração pós-upgrade está ativa, FORÇA upload ANTES de download.
-      // Isso garante que dados locais subam sem serem sobrescritos.
-      // =======================================================================
+      // Fluxo Híbrido: se fez upgrade, sobe tudo antes para não esmagar. Senão, fluxo normal.
       if (migracaoPosUpgradeAtiva) {
         debugPrint(
           '🚀 [SYNC] MODO MIGRAÇÃO: upload forçado antes do download.',
         );
         usinasUp = await _enviarUsinasLocais(empresaId, user.uid);
         lancamentosUp = await _enviarLancamentosLocais(empresaId, user.uid);
-        // Só depois de subir tudo, baixa o que houver na nuvem
         usinasDown = await _baixarUsinasRemotas(empresaId);
         lancamentosDown = await _baixarLancamentosRemotos(empresaId);
-        // Fecha a flag de migração pós-upgrade
         await _fecharMigracaoPosUpgrade();
       } else {
-        // Fluxo normal: upload + download em paralelo na ordem tradicional
         usinasUp = await _enviarUsinasLocais(empresaId, user.uid);
         usinasDown = await _baixarUsinasRemotas(empresaId);
         lancamentosUp = await _enviarLancamentosLocais(empresaId, user.uid);
@@ -264,7 +245,6 @@ class SincronizacaoService {
         itensLimpos = await _executarFaxinaInteligente(empresaId);
       }
 
-      // Fecha a janela de migração pós-update (só na primeira sync bem-sucedida)
       if (janelaMigracaoAtiva) {
         await _fecharJanelaMigracao();
       }
@@ -295,8 +275,49 @@ class SincronizacaoService {
     }
   }
 
+  // --- HELPER DE FALLBACK PARA QUANDO O CACHE FALHA ---
+  Future<void> _buscarPermissoesFirestore(
+    User user,
+    Function(bool) setEmpresaPro,
+    Function(String) setEmpresaId,
+    Function(bool) setIsAdmin,
+  ) async {
+    try {
+      final meuDoc = await _firestore.collection('users').doc(user.uid).get();
+      final String myEmpresaId = meuDoc.data()?['empresaId'] ?? user.uid;
+      final String myPlano = meuDoc.data()?['plano'] ?? 'gratis';
+      final bool myIsAdmin =
+          (meuDoc.data()?['role'] == 'admin' || myEmpresaId == user.uid);
+
+      setEmpresaId(myEmpresaId);
+      setIsAdmin(myIsAdmin);
+
+      if (myEmpresaId == user.uid) {
+        setEmpresaPro(myPlano == 'pro');
+      } else {
+        try {
+          final donoDoc = await _firestore
+              .collection('users')
+              .doc(myEmpresaId)
+              .get();
+          final planoDono = donoDoc.data()?['plano'] ?? 'gratis';
+          setEmpresaPro(planoDono == 'pro');
+        } catch (e) {
+          setEmpresaPro(myPlano == 'pro');
+        }
+      }
+      debugPrint(
+        '🐢 [SYNC] Cache ausente. Autenticação validada via Firestore.',
+      );
+    } catch (e) {
+      debugPrint('⚠️ [SYNC] Falha ao verificar plano no Firestore: $e');
+      // Em caso de falha de rede total, não trava o app, assume grátis por segurança
+      setEmpresaPro(false);
+    }
+  }
+
   // ===========================================================================
-  // USINAS (sem alterações na lógica interna)
+  // USINAS
   // ===========================================================================
   Future<int> _enviarUsinasLocais(String empresaId, String userId) async {
     int contador = 0;
@@ -315,7 +336,6 @@ class SincronizacaoService {
               .collection('usinas')
               .doc(usina.idRemoto)
               .get();
-
           if (!docSnapshot.exists) {
             await usina.delete();
             await SyncQueueService.remove('usinas', usina.id);
@@ -417,7 +437,6 @@ class SincronizacaoService {
               .collection('lancamentos')
               .doc(l.idRemoto)
               .get();
-
           if (!docSnapshot.exists) {
             await l.delete();
             await SyncQueueService.remove('lancamentos', l.id);
@@ -568,7 +587,7 @@ class SincronizacaoService {
   }
 
   // ===========================================================================
-  // HELPERS DE CONVERSÃO (idênticos à versão anterior)
+  // HELPERS DE CONVERSÃO
   // ===========================================================================
   DateTime _converterParaDateTime(dynamic valor) {
     if (valor == null) return DateTime.now();
@@ -790,7 +809,6 @@ class SincronizacaoService {
 
   void _atualizarLancamentoComMap(LancamentoMensal l, Map<String, dynamic> m) {
     final lNuvem = _mapToLancamento(m, l.idRemoto!);
-
     l.dataReferencia = lNuvem.dataReferencia;
     l.geracaoTotalKwh = lNuvem.geracaoTotalKwh;
     l.energiaInjetadaKwh = lNuvem.energiaInjetadaKwh;

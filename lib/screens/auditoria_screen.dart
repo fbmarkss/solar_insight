@@ -49,7 +49,7 @@ class _AuditoriaScreenState extends State<AuditoriaScreen> {
         ),
         body: LayoutBuilder(
           builder: (context, constraints) {
-            bool isWeb = constraints.maxWidth >= 900;
+            bool isWeb = constraints.maxWidth >= 800;
 
             return TabBarView(
               children: [

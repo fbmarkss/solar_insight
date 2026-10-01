@@ -411,7 +411,7 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
               height: 50,
               child: ElevatedButton.icon(
                 onPressed: () {
-                  bool isDesktop = MediaQuery.of(context).size.width >= 900;
+                  bool isDesktop = MediaQuery.of(context).size.width >= 800;
 
                   if (isDesktop) {
                     showDialog(

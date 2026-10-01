@@ -44,7 +44,7 @@ class ResponsiveLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        bool isDesktop = constraints.maxWidth >= 900;
+        bool isDesktop = constraints.maxWidth >= 800;
 
         if (!isDesktop) {
           int mobileIndex = currentIndex > 2 ? 0 : currentIndex;

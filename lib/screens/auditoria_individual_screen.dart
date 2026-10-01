@@ -1,5 +1,12 @@
 // Caminho: lib/screens/auditoria_individual_screen.dart
-// Descrição: Tela de Auditoria Anual com uso de Dados Reais da Calculadora, Gráficos de Balanço e Custo Evitado, e Alerta de Retenção da Concessionária.
+// Descrição: Tela de Auditoria Anual com uso de Dados Reais da Calculadora, Gráficos de Balanço e Custo Evitado.
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. Correção do Bug de Duplicação e Soma Dupla: As beneficiárias agora são agrupadas
+//      pelo ID único na hora de gerar o relatório consolidado, evitando que regras
+//      de rateio antigas (histórico de vigência) multipliquem os resultados.
+//   2. Remoção da exibição da percentagem fixa no card consolidado para não enganar o usuário.
+//   3. Título atualizado para "(Consolidado, Taxas Variáveis)" e adição de Tooltip explicativo.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -120,10 +127,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               l,
             );
 
-            // =================================================================
-            // CORREÇÃO 1: TARIFA INTELIGENTE
-            // Identifica se tem Tarifa TE + TUSD da IA, senão usa manual.
-            // =================================================================
             double tarifaReal = l.tarifaKwh;
             if (l.grupoTarifario == 'A' ||
                 l.modalidadeTarifaria == 'VERDE' ||
@@ -141,9 +144,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               tarifaReal = l.tarifaKwh;
             }
 
-            // =================================================================
-            // CORREÇÃO 2: DADOS REAIS DO FORMULÁRIO PARA CÁLCULO DE ECONOMIA
-            // =================================================================
             double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
                 .clamp(0.0, double.infinity);
             double creditosTotaisDisponiveis =
@@ -160,7 +160,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
             }
 
-            // Economia agora é calculada usando a tarifa real extraída
             double economiaFinanceira = energiaEfetivamentePoupada * tarifaReal;
             double custoProjetado = l.valorFaturaR + economiaFinanceira;
 
@@ -296,6 +295,9 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     );
   }
 
+  // ===========================================================================
+  // SEÇÃO REESCRITA: FLUXO DE CRÉDITOS (COM AGRUPAMENTO E TEXTOS CONSOLIDADOS)
+  // ===========================================================================
   Widget _buildFluxoCreditosSection(
     List<LancamentoMensal> lancamentosAuditados,
   ) {
@@ -305,11 +307,21 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     List<Widget> tiles = [];
 
     if (usina.isGeradora) {
-      for (var b in usina.beneficiarias) {
+      // ✅ 1. AGRUPAMENTO: Extrai apenas os IDs Únicos para não duplicar lojas com várias regras
+      Set<String> filhasIdsUnicas = usina.beneficiarias
+          .map((b) => b.idUsinaFilha)
+          .toSet();
+
+      for (String idFilha in filhasIdsUnicas) {
         double totalReal = 0;
 
+        // Pega o nome da primeira ocorrência para usar na tela
+        String nomeFilha = usina.beneficiarias
+            .firstWhere((b) => b.idUsinaFilha == idFilha)
+            .nome;
+
         final lancsDaFilha = boxLancamentos.values
-            .where((l) => l.usinaId == b.idUsinaFilha && !l.isDeletado)
+            .where((l) => l.usinaId == idFilha && !l.isDeletado)
             .toList();
 
         for (var lGeradora in lancamentosAuditados) {
@@ -323,15 +335,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
           } catch (_) {}
         }
 
-        tiles.add(
-          _buildFluxoTile(
-            b.nome,
-            b.percentual,
-            totalReal,
-            Colors.orange,
-            numero,
-          ),
-        );
+        tiles.add(_buildFluxoTile(nomeFilha, totalReal, Colors.orange, numero));
       }
     } else {
       double totalTeoricoGlobal = 0;
@@ -341,6 +345,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         totalRealGlobal += lFilha.energiaInjetadaKwh;
       }
 
+      // Procura todas as mães desta beneficiária
       final maes = boxUsinas.values.where(
         (u) =>
             u.isGeradora &&
@@ -349,9 +354,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
       );
 
       for (var mae in maes) {
-        final vinculo = mae.beneficiarias.firstWhere(
-          (b) => b.idUsinaFilha == usina.id,
-        );
         double totalTeoricoDestaMae = 0;
 
         final lancsMae = boxLancamentos.values
@@ -380,7 +382,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         tiles.add(
           _buildFluxoTile(
             mae.nome,
-            vinculo.percentual,
             totalTeoricoDestaMae,
             Colors.blue,
             numero,
@@ -453,10 +454,11 @@ class AuditoriaIndividualScreen extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 20),
+        // ✅ 3. TÍTULO ATUALIZADO COMO SOLICITADO
         Text(
           usina.isGeradora
-              ? "Destino dos Créditos (Acumulado Real)"
-              : "Origem dos Créditos (Cálculo Esperado)",
+              ? "Destino dos Créditos (Consolidado, Taxas Variáveis)"
+              : "Origem dos Créditos (Consolidado, Taxas Variáveis)",
           style: const TextStyle(
             fontWeight: FontWeight.bold,
             color: Colors.blueGrey,
@@ -469,9 +471,9 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     );
   }
 
+  // ✅ 2. WIDGET TILE REESCRITO (Remoção da percentagem e adição de Tooltip)
   Widget _buildFluxoTile(
     String nome,
-    double perc,
     double valor,
     Color cor,
     NumberFormat numero, {
@@ -490,20 +492,24 @@ class AuditoriaIndividualScreen extends StatelessWidget {
           Row(
             children: [
               Text(
-                "$nome (${perc.toStringAsFixed(0)}%)",
+                nome, // Sem a percentagem!
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
                 ),
               ),
-              if (isTeorico) ...[
-                const SizedBox(width: 6),
-                Icon(
-                  Icons.info_outline,
-                  size: 12,
+              const SizedBox(width: 6),
+              Tooltip(
+                message: isTeorico
+                    ? 'Valor calculado. As taxas de rateio variaram durante o ano.'
+                    : 'Valor consolidado. As taxas de rateio variaram durante o ano.',
+                triggerMode: TooltipTriggerMode.tap,
+                child: Icon(
+                  isTeorico ? Icons.info_outline : Icons.help_outline,
+                  size: 14,
                   color: cor.withValues(alpha: 0.6),
                 ),
-              ],
+              ),
             ],
           ),
           Text(

@@ -233,7 +233,7 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
 
         return LayoutBuilder(
           builder: (context, constraints) {
-            bool isWeb = constraints.maxWidth >= 900;
+            bool isWeb = constraints.maxWidth >= 800;
 
             return RefreshIndicator(
               color: Colors.deepOrange,
