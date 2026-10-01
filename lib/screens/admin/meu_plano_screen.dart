@@ -2,12 +2,8 @@
 // Descrição: Tela de Gestão de Empresa com Paywall, Restaurar Compras e Cargo Dinâmico.
 //
 // ALTERAÇÕES DESTA VERSÃO:
-//   1. Diferencia DONO da empresa vs COLABORADOR.
-//   2. Só o DONO pode fazer upgrade (colaborador vê aviso para contatar admin).
-//   3. Só o DONO vê o botão "Restaurar Compras".
-//   4. Card de status mostra claramente "Gerenciado pelo administrador"
-//      quando o usuário é colaborador.
-//   5. Todo o resto permanece intacto.
+//   1. Remoção da variável '_meuUid' que não estava a ser utilizada (limpeza de código).
+//   2. Ajuste do breakpoint de responsividade de 900px para 800px ao abrir o Paywall.
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -29,13 +25,12 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
   bool _isSaving = false;
   String _userRole = "admin";
   String _empresaId = "";
-  String _meuUid = "";
-  bool _isDono = false;
+  bool _isDono = false; // Removido o _meuUid daqui
 
   @override
   void initState() {
     super.initState();
-    _meuUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    // Removido o _meuUid = FirebaseAuth... daqui
     _carregarDadosEmpresa();
   }
 
@@ -92,7 +87,7 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
 
     setState(() => _isSaving = true);
     try {
-      // ✅ Grava no doc do dono (que é o próprio usuário, se isDono)
+      // Grava no doc do dono (que é o próprio usuário, se isDono)
       await FirebaseFirestore.instance
           .collection('users')
           .doc(_empresaId)
@@ -197,7 +192,7 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: _nomeEmpresaController,
-                  enabled: _isDono, // ✅ Só o dono edita
+                  enabled: _isDono, // Só o dono edita
                   decoration: InputDecoration(
                     labelText: "Nome Fantasia",
                     hintText: "Ex: Solar Engenharia",
@@ -411,6 +406,7 @@ class _MeuPlanoScreenState extends State<MeuPlanoScreen> {
               height: 50,
               child: ElevatedButton.icon(
                 onPressed: () {
+                  // ✅ Alteração do Breakpoint: 900 -> 800
                   bool isDesktop = MediaQuery.of(context).size.width >= 800;
 
                   if (isDesktop) {

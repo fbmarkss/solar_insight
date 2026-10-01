@@ -1,5 +1,5 @@
 // Caminho: lib/models/usina.dart
-// Descrição: Modelo de dados da Usina (Atualizado para Multi-tenancy, Autoria e Histórico de Rateio).
+// Descrição: Modelo de dados da Usina (Atualizado para Multi-tenancy, Autoria, Histórico de Rateio e Nova UC Informativa).
 
 import 'package:hive/hive.dart';
 
@@ -11,7 +11,7 @@ const String tipoBeneficiaria = 'BENEFICIARIA';
 class Usina extends HiveObject {
   // --- CAMPOS FUNCIONAIS (USADOS HOJE) ---
   @HiveField(0)
-  String id; // UUID Local
+  String id; // UUID Local (Chave Primária Imutável)
 
   @HiveField(1)
   String nome;
@@ -58,9 +58,13 @@ class Usina extends HiveObject {
   @HiveField(13)
   bool isDeletado;
 
-  // 5. AUTORIA (NOVO)
+  // 5. AUTORIA
   @HiveField(14)
   String? criadoPor; // ID do Usuário que criou (Para permissão de exclusão).
+
+  // 6. IDENTIFICAÇÃO VISUAL (NOVO)
+  @HiveField(15)
+  String? novaUcConcessionaria; // Código atualizado pela concessionária (Apenas para exibição)
 
   Usina({
     required this.id,
@@ -78,7 +82,8 @@ class Usina extends HiveObject {
     this.compartilhadoCom,
     this.ultimaSincronizacao,
     this.isDeletado = false,
-    this.criadoPor, // NOVO
+    this.criadoPor,
+    this.novaUcConcessionaria, // NOVO
   });
 
   // --- GETTERS AUXILIARES ---
@@ -220,7 +225,7 @@ class UsinaAdapter extends TypeAdapter<Usina> {
       paineis: (fields[6] as List).cast<PainelItem>(),
       investimentos: (fields[7] as List).cast<InvestimentoItem>(),
       beneficiarias: (fields[8] as List).cast<BeneficiariaItem>(),
-      // Leitura segura dos novos campos
+      // Leitura segura dos campos opcionais
       idRemoto: fields.containsKey(9) ? fields[9] as String? : null,
       tenantId: fields.containsKey(10) ? fields[10] as String? : null,
       compartilhadoCom: fields.containsKey(11)
@@ -230,14 +235,17 @@ class UsinaAdapter extends TypeAdapter<Usina> {
           ? fields[12] as DateTime?
           : null,
       isDeletado: fields.containsKey(13) ? fields[13] as bool : false,
-      criadoPor: fields.containsKey(14) ? fields[14] as String? : null, // NOVO
+      criadoPor: fields.containsKey(14) ? fields[14] as String? : null,
+      novaUcConcessionaria: fields.containsKey(15)
+          ? fields[15] as String?
+          : null, // NOVO
     );
   }
 
   @override
   void write(BinaryWriter writer, Usina obj) {
     writer
-      ..writeByte(15) // Aumentado para 15 campos
+      ..writeByte(16) // Aumentado para 16 campos
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -266,8 +274,10 @@ class UsinaAdapter extends TypeAdapter<Usina> {
       ..write(obj.ultimaSincronizacao)
       ..writeByte(13)
       ..write(obj.isDeletado)
-      ..writeByte(14) // NOVO
-      ..write(obj.criadoPor);
+      ..writeByte(14)
+      ..write(obj.criadoPor)
+      ..writeByte(15) // NOVO
+      ..write(obj.novaUcConcessionaria);
   }
 
   @override
@@ -409,7 +419,6 @@ class BeneficiariaItemAdapter extends TypeAdapter<BeneficiariaItem> {
       nome: fields[0] as String,
       idUsinaFilha: fields[1] as String,
       percentual: fields[2] as double,
-      // Fallback para dados antigos: Aplica o rateio desde o ano 2000
       dataInicio: fields.containsKey(3)
           ? fields[3] as DateTime
           : DateTime(2000, 1, 1),
@@ -420,16 +429,16 @@ class BeneficiariaItemAdapter extends TypeAdapter<BeneficiariaItem> {
   @override
   void write(BinaryWriter writer, BeneficiariaItem obj) {
     writer
-      ..writeByte(5) // ATENÇÃO: Aumentado para 5 campos
+      ..writeByte(5)
       ..writeByte(0)
       ..write(obj.nome)
       ..writeByte(1)
       ..write(obj.idUsinaFilha)
       ..writeByte(2)
       ..write(obj.percentual)
-      ..writeByte(3) // NOVO CAMPO
+      ..writeByte(3)
       ..write(obj.dataInicio)
-      ..writeByte(4) // NOVO CAMPO
+      ..writeByte(4)
       ..write(obj.dataFim);
   }
 

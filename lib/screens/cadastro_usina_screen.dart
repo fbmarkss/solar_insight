@@ -1,5 +1,10 @@
 // Caminho: lib/screens/cadastro_usina_screen.dart
 // Descrição: Tela de Cadastro com Bloqueios Inteligentes (Freemium) e Regras para Funcionários/Admin.
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. Adição do `_novaUcController` para gerenciar a nova máscara de exibição da concessionária.
+//   2. Adição do parâmetro `isObrigatorio` no `_buildStylishField` para permitir campos opcionais.
+//   3. O campo "Novo Código UC" fica permanentemente editável, mesmo com o histórico trancado.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +38,8 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
 
   final _nomeController = TextEditingController();
   final _ucController = TextEditingController();
+  // ✅ NOVO: Controlador para o código alternativo da concessionária
+  final _novaUcController = TextEditingController();
 
   // ATUALIZAÇÃO: Neoenergia Coelba adicionada à lista de concessionárias suportadas.
   final List<String> _opcoesConcessionaria = [
@@ -84,6 +91,8 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       final usina = widget.usinaParaEditar!;
       _nomeController.text = usina.nome;
       _ucController.text = usina.id;
+      // ✅ NOVO: Carrega o dado existente, se houver
+      _novaUcController.text = usina.novaUcConcessionaria ?? '';
       _concessionaria = _opcoesConcessionaria.contains(usina.concessionaria)
           ? usina.concessionaria
           : 'Outra';
@@ -165,6 +174,11 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     final String currentUid = user?.uid ?? 'offline_user';
     final DateTime agora = DateTime.now();
 
+    // Limpa a nova UC se for submetida vazia
+    final String? novaUcParsed = _novaUcController.text.trim().isEmpty
+        ? null
+        : _novaUcController.text.trim();
+
     if (widget.usinaParaEditar == null) {
       bool existeAtiva = box.values.any(
         (u) => u.id == _ucController.text && u.ativa && !u.isDeletado,
@@ -193,6 +207,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       var usina = widget.usinaParaEditar!;
       usina.nome = _nomeController.text;
       usina.id = _ucController.text;
+      usina.novaUcConcessionaria = novaUcParsed; // ✅ NOVO: Atualiza o campo
       usina.concessionaria = _concessionaria;
       usina.tipo = _tipoSelecionado;
       usina.inversores = List.from(_listaInversores);
@@ -208,6 +223,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       final novaUsina = Usina(
         id: _ucController.text,
         nome: _nomeController.text,
+        novaUcConcessionaria: novaUcParsed, // ✅ NOVO: Salva na criação
         concessionaria: _concessionaria,
         tipo: _tipoSelecionado,
         ativa: true,
@@ -325,7 +341,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       listen: false,
     );
 
-    // Usa apenas as filhas com vínculo vigente para calcular o limite
     int totalFilhasAtivas = _listaBeneficiarias
         .where((b) => b.dataFim == null)
         .length;
@@ -360,7 +375,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
               u.id != _ucController.text &&
               u.ativa &&
               !u.isDeletado &&
-              // Não lista se já possui um vínculo ativo atual
               !_listaBeneficiarias.any(
                 (b) => b.idUsinaFilha == u.id && b.dataFim == null,
               ),
@@ -415,9 +429,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                   final picked = await showDatePicker(
                     context: context,
                     initialDate: dataSelecionada,
-                    firstDate: DateTime(
-                      2000,
-                    ), // Permite lançar histórico do passado
+                    firstDate: DateTime(2000),
                     lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
                   );
                   if (picked != null) {
@@ -464,7 +476,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                           nome: selecionada!.nome,
                           idUsinaFilha: selecionada!.id,
                           percentual: _parsePotencia(percCtrl.text),
-                          dataInicio: dataSelecionada, // Salvando com Data
+                          dataInicio: dataSelecionada,
                         ),
                       ),
                     );
@@ -488,7 +500,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     );
   }
 
-  // --- NOVA FUNÇÃO PARA ALTERAR RATEIO SEM PERDER HISTÓRICO ---
   void _alterarPercentual(BeneficiariaItem itemAtivo) {
     final percCtrl = TextEditingController(
       text: itemAtivo.percentual.toString(),
@@ -536,8 +547,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                   final picked = await showDatePicker(
                     context: context,
                     initialDate: dataSelecionada,
-                    firstDate: itemAtivo
-                        .dataInicio, // A nova regra não pode conflitar com o início da atual
+                    firstDate: itemAtivo.dataInicio,
                     lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
                   );
                   if (picked != null) {
@@ -559,12 +569,10 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                 onPressed: () {
                   if (percCtrl.text.isNotEmpty) {
                     setState(() {
-                      // 1. Encerra a regra anterior no dia anterior à nova data
                       itemAtivo.dataFim = dataSelecionada.subtract(
                         const Duration(days: 1),
                       );
 
-                      // 2. Cria a nova regra vigente (dataFim = null)
                       _listaBeneficiarias.add(
                         BeneficiariaItem(
                           nome: itemAtivo.nome,
@@ -848,7 +856,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
   Widget build(BuildContext context) {
     bool isGeradora = _tipoSelecionado == tipoGeradora;
 
-    // A contagem da barra de rateio considera apenas as regras VIGENTES
     double totalRateio = _listaBeneficiarias
         .where((b) => b.dataFim == null)
         .fold(0.0, (acc, item) => acc + item.percentual);
@@ -859,7 +866,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
 
     bool isWeb = MediaQuery.of(context).size.width >= 800;
 
-    // Obtém o guardião para verificar limites na UI
     final subProvider = Provider.of<SubscriptionProvider>(context);
     bool podeGeradora = subProvider.podeAdicionarUsinaGeradora(
       _totalGeradorasAtuais,
@@ -868,7 +874,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
       _totalBeneficiariasAtuais,
     );
 
-    // Libera a edição se já for uma usina existente, para ele não ficar trancado de editar a própria usina
     if (widget.usinaParaEditar != null) {
       if (widget.usinaParaEditar!.isGeradora) podeGeradora = true;
       if (!widget.usinaParaEditar!.isGeradora) podeBeneficiaria = true;
@@ -886,7 +891,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
         ),
         backgroundColor: Colors.white,
         elevation: 1,
-        // Remove a seta de voltar no Web
         automaticallyImplyLeading: !isWeb,
         leading: isWeb
             ? null
@@ -894,7 +898,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                 icon: const Icon(Icons.arrow_back, color: Colors.black87),
                 onPressed: () => Navigator.pop(context),
               ),
-        // Adiciona o X (Fechar) no lado direito no Web
         actions: [
           if (isWeb)
             Padding(
@@ -926,7 +929,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                   ),
                   child: Row(
                     children: [
-                      // PASSA O BLOQUEIO COMO PARÂMETRO
                       _buildTypeOption(
                         'GERADORA',
                         tipoGeradora,
@@ -960,11 +962,22 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
             const SizedBox(height: 16),
             _buildStylishField(
               controller: _ucController,
-              label: 'Nº da UC (Conta)',
-              hint: 'Número da instalação',
+              label: 'Nº da UC Original (Código)',
+              hint: 'Número da instalação na primeira fatura',
               icon: Icons.numbers,
               isNumber: true,
               isReadOnly: _temHistoricoFinanceiro,
+            ),
+
+            // ✅ NOVO CAMPO: Opcional e permanentemente livre
+            _buildStylishField(
+              controller: _novaUcController,
+              label: 'Novo Código UC (Opcional)',
+              hint: 'Apenas se a concessionária mudou o código original',
+              icon: Icons.pin_outlined,
+              isNumber: true,
+              isReadOnly: false,
+              isObrigatorio: false, // Não tranca o formulário
             ),
 
             if (isGeradora) ...[
@@ -983,7 +996,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
 
             const SizedBox(height: 40),
 
-            // BOTÕES INFERIORES: Salvar e (na Web) Cancelar
             Row(
               children: [
                 if (isWeb) ...[
@@ -1264,7 +1276,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
         SizedBox(width: 8),
         Expanded(
           child: Text(
-            'Histórico protegido: Tipo e UC bloqueados.',
+            'Histórico protegido: Código Original (UC) e o Tipo estão bloqueados.',
             style: TextStyle(color: Colors.brown, fontSize: 12),
           ),
         ),
@@ -1351,8 +1363,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
             ],
           ),
         ),
-
-      // FILTRA PARA EXIBIR APENAS AS VIGENTES NA TELA
       ..._listaBeneficiarias
           .where((b) => b.dataFim == null)
           .map(
@@ -1377,7 +1387,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                     icon: const Icon(Icons.link_off, color: Colors.red),
                     tooltip: 'Remover Vínculo',
                     onPressed: () => setState(() {
-                      // A lixeira remove todo o histórico daquela unidade filha para liberar a vaga
                       _listaBeneficiarias.removeWhere(
                         (b) => b.idUsinaFilha == i.idUsinaFilha,
                       );
@@ -1489,13 +1498,12 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     ),
   );
 
-  // --- NOVA LÓGICA DO BOTÃO COM CADEADO (COM PAYWALL E CARGO) ---
   Widget _buildTypeOption(
     String label,
     String value,
     IconData icon, {
     bool isBloqueado = false,
-    bool isAdmin = true, // <--- NOVO
+    bool isAdmin = true,
   }) {
     bool isSelected = _tipoSelecionado == value;
 
@@ -1504,7 +1512,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
         onTap: () {
           if (isBloqueado) {
             if (isAdmin) {
-              // ABRINDO A VITRINE SE FOR ADMIN
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -1515,7 +1522,6 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
                 ),
               );
             } else {
-              // MENSAGEM SE FOR FUNCIONÁRIO
               AppFeedback.show(
                 context,
                 "🔒 Limite de $label atingido. Solicite ao administrador que faça o upgrade para o PRO.",
@@ -1594,6 +1600,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     ],
   );
 
+  // ✅ NOVO: Parâmetro isObrigatorio adicionado (padrão true para não afetar os outros campos)
   Widget _buildStylishField({
     required TextEditingController controller,
     required String label,
@@ -1603,6 +1610,7 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     bool isMoeda = false,
     String? suffix,
     bool isReadOnly = false,
+    bool isObrigatorio = true,
   }) => Container(
     margin: const EdgeInsets.only(top: 12),
     decoration: BoxDecoration(
@@ -1619,7 +1627,9 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     child: TextFormField(
       controller: controller,
       readOnly: isReadOnly,
-      validator: (v) => (v == null || v.isEmpty) ? 'Campo obrigatório' : null,
+      validator: isObrigatorio
+          ? (v) => (v == null || v.isEmpty) ? 'Campo obrigatório' : null
+          : null,
       keyboardType: isNumber
           ? const TextInputType.numberWithOptions(decimal: true)
           : TextInputType.text,

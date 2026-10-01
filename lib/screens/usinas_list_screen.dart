@@ -2,10 +2,8 @@
 // Descrição: Lista de Usinas com Navegador Aninhado Permanente e Proteção de Estado.
 //
 // ALTERAÇÕES DESTA VERSÃO:
-//   1. O Navigator aninhado foi promovido à raiz absoluta do método build.
-//   2. A verificação responsiva (isWeb) ocorre agora DENTRO da rota principal.
-//      Isto garante que pequenos redimensionamentos da janela alteram o design da lista
-//      fluidamente, sem NUNCA destruir a pilha de navegação (formulários ou IA abertos).
+//   1. Criação do método `_buildUcDisplay` para exibir inteligentemente a Nova UC.
+//   2. Adição de um Tooltip informativo que revela a UC original caso tenha sido alterada.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -124,14 +122,12 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // NAVEGADOR PERMANENTE (Raiz da Aba)
     return Navigator(
       key: _nestedNavKey,
       onGenerateRoute: (settings) {
         return MaterialPageRoute(
           builder: (navContext) {
-            // A responsividade agora é avaliada DENTRO da rota principal.
-            // Pequenos redimensionamentos alteram a lista abaixo, mas não destroem o Navegador.
+            // Responsividade definida para 800 pixels
             bool isWeb = MediaQuery.of(navContext).size.width >= 800;
             return _buildListaConteudo(isWeb, navContext);
           },
@@ -419,6 +415,39 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
     );
   }
 
+  // ✅ NOVO: Helper inteligente para formatar a UC
+  Widget _buildUcDisplay(Usina usina, Color textColor) {
+    bool temNovaUc =
+        usina.novaUcConcessionaria != null &&
+        usina.novaUcConcessionaria!.trim().isNotEmpty;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          temNovaUc ? 'UC: ${usina.novaUcConcessionaria}' : 'UC:${usina.id}',
+          style: TextStyle(
+            fontSize: 12,
+            color: textColor,
+            fontWeight: temNovaUc ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+        if (temNovaUc) ...[
+          const SizedBox(width: 4),
+          Tooltip(
+            message: 'Código anterior UC: ${usina.id}',
+            triggerMode: TooltipTriggerMode.tap,
+            child: Icon(
+              Icons.info_outline,
+              size: 14,
+              color: textColor.withValues(alpha: 0.8),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   Widget _buildUsinaCardWeb(BuildContext context, Usina usina, bool isWeb) {
     final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
     final lancs = boxLanc.values
@@ -515,13 +544,8 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                             ],
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            'UC: ${usina.id}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.blueGrey.shade400,
-                            ),
-                          ),
+                          // ✅ USO DO NOVO WIDGET DE UC
+                          _buildUcDisplay(usina, Colors.blueGrey.shade400!),
                         ],
                       ),
                     ),
@@ -613,13 +637,8 @@ class _UsinasListScreenState extends State<UsinasListScreen> {
                         const SizedBox(height: 4),
                         Row(
                           children: [
-                            Text(
-                              'UC: ${usina.id}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                              ),
-                            ),
+                            // ✅ USO DO NOVO WIDGET DE UC
+                            _buildUcDisplay(usina, Colors.grey[600]!),
                             const Spacer(),
                             if (!usina.ativa)
                               Container(

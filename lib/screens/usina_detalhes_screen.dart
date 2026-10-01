@@ -1,5 +1,9 @@
 // Caminho: lib/screens/usina_detalhes_screen.dart
 // Descrição: Dashboard de Performance da Usina (Com Auditoria Visível e Fonte Única de Verdade).
+//
+// ALTERAÇÕES DESTA VERSÃO:
+//   1. Cabeçalho de identificação da Usina atualizado para exibir o "Novo Código UC"
+//      caso exista, acompanhado de um ícone de informação que revela a UC original.
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -342,6 +346,48 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
     );
   }
 
+  // ✅ NOVO: Helper inteligente para formatar a UC no cabeçalho
+  Widget _buildUcHeaderDisplay() {
+    bool temNovaUc =
+        widget.usina.novaUcConcessionaria != null &&
+        widget.usina.novaUcConcessionaria!.trim().isNotEmpty;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          widget.usina.isGeradora ? Icons.wb_sunny : Icons.home_work,
+          size: 14,
+          color: Colors.grey,
+        ),
+        const SizedBox(width: 4),
+        Text(
+          temNovaUc
+              ? 'UC: ${widget.usina.novaUcConcessionaria}'
+              : 'UC: ${widget.usina.id}',
+          style: TextStyle(
+            fontSize: 14,
+            color: Colors.grey,
+            fontWeight: temNovaUc ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+        if (temNovaUc) ...[
+          const SizedBox(width: 4),
+          Tooltip(
+            message: 'Código anterior UC: ${widget.usina.id}',
+            triggerMode: TooltipTriggerMode.tap,
+            child: const Icon(Icons.info_outline, size: 14, color: Colors.grey),
+          ),
+        ],
+        const SizedBox(width: 4),
+        Text(
+          '• ${widget.usina.isGeradora ? "Geradora" : "Beneficiária"}',
+          style: const TextStyle(fontSize: 14, color: Colors.grey),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -496,25 +542,8 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
                       color: Colors.black87,
                     ),
                   ),
-                  Row(
-                    children: [
-                      Icon(
-                        widget.usina.isGeradora
-                            ? Icons.wb_sunny
-                            : Icons.home_work,
-                        size: 14,
-                        color: Colors.grey,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        'UC: ${widget.usina.id} • ${widget.usina.isGeradora ? "Geradora" : "Beneficiária"}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
+                  // ✅ NOVO: Chamada do widget auxiliar que gerencia a UC
+                  _buildUcHeaderDisplay(),
                 ],
               ),
               const SizedBox(height: 20),

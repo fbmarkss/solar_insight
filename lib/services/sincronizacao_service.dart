@@ -3,9 +3,10 @@
 //
 // ALTERAÇÕES DESTA VERSÃO:
 //   1. CORREÇÃO DE SINTAXE: Substituição dos ponteiros (&) inválidos em Dart por
-//      callbacks (funções anônimas) na chamada do _buscarPermissoesFirestore.
+//       callbacks (funções anônimas) na chamada do _buscarPermissoesFirestore.
 //   2. O motor agora lê o plano, role e empresaId diretamente do cache local.
 //   3. Atualização do `lastSync` transformada em "Fire-and-forget" (não bloqueia a thread).
+//   4. NOVO: Inclusão do campo 'novaUcConcessionaria' nos métodos _usinaToMap e _mapToUsina.
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -646,6 +647,8 @@ class SincronizacaoService {
             },
           )
           .toList(),
+      // ✅ NOVO CAMPO INCLUÍDO AQUI
+      'novaUcConcessionaria': u.novaUcConcessionaria,
     };
   }
 
@@ -661,6 +664,8 @@ class SincronizacaoService {
       criadoPor: map['criadoPor'],
       isDeletado: map['isDeletado'] ?? false,
       ultimaSincronizacao: _converterParaDateTime(map['ultimaAtualizacao']),
+      // ✅ NOVO CAMPO LIDO AQUI DE FORMA SEGURA
+      novaUcConcessionaria: map['novaUcConcessionaria'] as String?,
       inversores: (map['inversores'] as List? ?? [])
           .map(
             (i) => InversorItem(
@@ -712,6 +717,8 @@ class SincronizacaoService {
     u.ativa = m['ativa'] ?? u.ativa;
     u.isDeletado = m['isDeletado'] ?? false;
     u.tipo = m['tipo'] ?? u.tipo;
+    // ✅ NOVO CAMPO ATUALIZADO AQUI
+    u.novaUcConcessionaria = m['novaUcConcessionaria'] as String?;
 
     final usinaAtualizada = _mapToUsina(m, u.idRemoto!);
     u.inversores = usinaAtualizada.inversores;

@@ -69,7 +69,7 @@ class RelatorioAuditoriaPdf {
         },
       );
 
-      // --- CORREÇÃO 1: TARIFA INTELIGENTE NO PDF ---
+      // --- TARIFA INTELIGENTE ---
       double tarifaReal = l.tarifaKwh;
       if (l.grupoTarifario == 'A' ||
           l.modalidadeTarifaria == 'VERDE' ||
@@ -86,7 +86,6 @@ class RelatorioAuditoriaPdf {
         tarifaReal = l.tarifaKwh;
       }
 
-      // --- CORREÇÃO 2: DADOS REAIS DO FORMULÁRIO (Igual à tela) ---
       double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
         0.0,
         double.infinity,
@@ -94,7 +93,6 @@ class RelatorioAuditoriaPdf {
       double creditosTotaisDisponiveis =
           l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
 
-      // A energia compensada real é limitada ao que ele consumiu da rede
       double energiaCompensada = creditosTotaisDisponiveis.clamp(
         0.0,
         l.energiaConsumidaRedeKwh,
@@ -102,10 +100,8 @@ class RelatorioAuditoriaPdf {
 
       double energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
 
-      // Usa a tarifaReal em vez de l.tarifaKwh
       double economiaFinanceira = energiaEfetivamentePoupada * tarifaReal;
       double custoProjetado = l.valorFaturaR + economiaFinanceira;
-      // ----------------------------------------------------------------
 
       dadosMensais[key]!['custo'] =
           (dadosMensais[key]!['custo'] as double) + l.valorFaturaR;
@@ -118,7 +114,6 @@ class RelatorioAuditoriaPdf {
       graficoOrdenado = graficoOrdenado.sublist(graficoOrdenado.length - 12);
     }
 
-    // Calcula o maior valor do gráfico para escalar as barras
     double maxValGrafico = 0;
     for (var d in graficoOrdenado) {
       if (d['custoProjetado'] > maxValGrafico) {
@@ -127,6 +122,14 @@ class RelatorioAuditoriaPdf {
       if (d['custo'] > maxValGrafico) maxValGrafico = d['custo'];
     }
     if (maxValGrafico == 0) maxValGrafico = 1;
+
+    // ✅ Lógica da Nova UC para o cabeçalho do PDF
+    bool temNovaUc =
+        usina.novaUcConcessionaria != null &&
+        usina.novaUcConcessionaria!.trim().isNotEmpty;
+    String textoUcDisplay = temNovaUc
+        ? '${usina.novaUcConcessionaria} (Código anterior UC: ${usina.id})'
+        : usina.id;
 
     // 3. Monta a página do PDF
     pdf.addPage(
@@ -211,7 +214,8 @@ class RelatorioAuditoriaPdf {
                         'Unidade: ${usina.nome}',
                         style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                       ),
-                      pw.Text('Código UC: ${usina.id}'),
+                      // ✅ Exibindo a UC Inteligente no PDF
+                      pw.Text('Código UC: $textoUcDisplay'),
                     ],
                   ),
                   pw.Column(
@@ -431,7 +435,7 @@ class RelatorioAuditoriaPdf {
             pw.TableHelper.fromTextArray(
               headers: [
                 'Mês/Ano',
-                'Energia Total\n(kWh)', // Genérico para cobrir todos os 3 cenários
+                'Energia Total\n(kWh)',
                 'Consumiu\n(kWh)',
                 'Fatura',
                 'Sobrou/Faltou\n(kWh)',
@@ -444,7 +448,7 @@ class RelatorioAuditoriaPdf {
               ),
               headerDecoration: pw.BoxDecoration(
                 color: PdfColor.fromHex('#455A64'),
-              ), // BlueGrey800
+              ),
               cellStyle: const pw.TextStyle(fontSize: 9),
               cellAlignment: pw.Alignment.center,
               oddRowDecoration: const pw.BoxDecoration(color: PdfColors.grey50),
@@ -461,11 +465,9 @@ class RelatorioAuditoriaPdf {
                   anterior,
                 );
 
-                // Lógica de "Energia Total" baseada APENAS no formulário
                 double energiaTotal = l.geracaoTotalKwh;
                 if (energiaTotal == 0 && l.energiaInjetadaKwh > 0) {
-                  energiaTotal = l
-                      .energiaInjetadaKwh; // Caso só lance injeção e não a geração bruta
+                  energiaTotal = l.energiaInjetadaKwh;
                 }
                 energiaTotal += (l.creditosRecebidosDeTerceiros ?? 0.0);
 
@@ -486,7 +488,7 @@ class RelatorioAuditoriaPdf {
       ),
     );
 
-    // 4. Dispara a ação de impressão nativa (Funciona na Web, iOS e Android)
+    // 4. Dispara a ação de impressão nativa
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
       name: 'Auditoria_${usina.nome.replaceAll(" ", "_")}.pdf',

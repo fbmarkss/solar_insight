@@ -1,5 +1,5 @@
 // Caminho: lib/services/data_backup_service.dart
-// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA, CSV com Saldo e Histórico de Rateio.
+// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA, CSV com Saldo, Histórico de Rateio e Nova UC.
 
 import 'dart:convert';
 import 'dart:io';
@@ -52,6 +52,7 @@ class DataBackupService {
     final boxUsinas = Hive.box<Usina>('usinas');
     List<List<dynamic>> rows = [];
 
+    // ✅ NOVO: Adicionado campo "Nova_UC" no final das colunas
     rows.add([
       "ID_UC",
       "Nome",
@@ -64,6 +65,7 @@ class DataBackupService {
       "Painel_Marca",
       "Painel_Pot_W",
       "Painel_Qtd",
+      "Nova_UC",
     ]);
 
     for (var u in boxUsinas.values.where((u) => !u.isDeletado)) {
@@ -91,6 +93,7 @@ class DataBackupService {
         panMarca,
         panPot > 0 ? panPot.toString().replaceAll('.', ',') : "",
         panQtd > 0 ? panQtd : "",
+        u.novaUcConcessionaria ?? "", // ✅ NOVO: Escreve no CSV se existir
       ]);
     }
 
@@ -190,6 +193,11 @@ class DataBackupService {
           tenantId: userCtx['empresaId'],
           criadoPor: userCtx['uid'],
           ultimaSincronizacao: agora,
+          // ✅ NOVO: Leitura segura caso a coluna 11 (Nova UC) exista no CSV do usuário
+          novaUcConcessionaria:
+              row.length >= 12 && row[11].toString().trim().isNotEmpty
+              ? row[11].toString().trim()
+              : null,
         );
 
         await boxUsinas.add(nova);
@@ -209,8 +217,6 @@ class DataBackupService {
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
 
     List<List<dynamic>> rows = [];
-    // O Relatório CSV simples não exporta tudo, é só pra visualização do utilizador.
-    // O Backup JSON é que faz o trabalho pesado. (Adicionado Saldo Acumulado).
     rows.add([
       "ID_UC",
       "Nome da Usina",
@@ -222,7 +228,7 @@ class DataBackupService {
       "Fatura",
       "Demanda",
       "Leitura Inversor",
-      "Saldo Acumulado", // <--- NOVO CAMPO
+      "Saldo Acumulado",
     ]);
 
     final lancamentos = boxLancamentos.values
@@ -247,10 +253,7 @@ class DataBackupService {
         l.valorFaturaR.toString().replaceAll('.', ','),
         l.custoDemandaR.toString().replaceAll('.', ','),
         (l.leituraInversor ?? 0.0).toString().replaceAll('.', ','),
-        (l.saldoInformadoNaFatura ?? 0.0).toString().replaceAll(
-          '.',
-          ',',
-        ), // <--- CORRIGIDO AQUI
+        (l.saldoInformadoNaFatura ?? 0.0).toString().replaceAll('.', ','),
       ]);
     }
 
@@ -329,7 +332,7 @@ class DataBackupService {
             leituraInversor: row.length > 9 ? _parseDouble(row[9]) : 0.0,
             saldoInformadoNaFatura: row.length > 10
                 ? _parseDouble(row[10])
-                : 0.0, // <--- NOVO CAMPO SEGURO
+                : 0.0,
             tenantId: userCtx['empresaId'],
             criadoPor: userCtx['uid'],
             ultimaModificacao: agora,
@@ -361,6 +364,8 @@ class DataBackupService {
             'concessionaria': u.concessionaria,
             'tipo': u.tipo,
             'ativa': u.ativa,
+            // ✅ NOVO CAMPO: Guardar no backup JSON
+            'novaUcConcessionaria': u.novaUcConcessionaria,
             'inversores': u.inversores
                 .map(
                   (i) => {
@@ -394,7 +399,6 @@ class DataBackupService {
                     'nome': b.nome,
                     'idUsinaFilha': b.idUsinaFilha,
                     'percentual': b.percentual,
-                    // --- NOVOS CAMPOS DO HISTÓRICO DE VIGÊNCIA ---
                     'dataInicio': b.dataInicio.toIso8601String(),
                     'dataFim': b.dataFim?.toIso8601String(),
                   },
@@ -418,7 +422,6 @@ class DataBackupService {
             'custoDemandaR': l.custoDemandaR,
             'leituraInversor': l.leituraInversor,
             'observacao': l.observacao,
-            // --- NOVOS CAMPOS DA IA ADICIONADOS AQUI ---
             'grupoTarifario': l.grupoTarifario,
             'modalidadeTarifaria': l.modalidadeTarifaria,
             'tarifaTeUnica': l.tarifaTeUnica,
@@ -430,14 +433,13 @@ class DataBackupService {
             'custoIluminacaoPublica': l.custoIluminacaoPublica,
             'multaReativo': l.multaReativo,
             'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
-            // ---------------------------------------------
           },
         )
         .toList();
 
     final backupData = {
       'versao':
-          '1.4', // Subimos a versão do Backup por causa do Histórico de Rateio
+          '1.5', // ✅ Versão elevada devido à adição do campo novaUcConcessionaria
       'dataBackup': DateTime.now().toIso8601String(),
       'usinas': usinasMap,
       'lancamentos': lancamentosMap,
@@ -557,7 +559,6 @@ class DataBackupService {
                 nome: ben['nome'],
                 idUsinaFilha: ben['idUsinaFilha'],
                 percentual: (ben['percentual'] as num).toDouble(),
-                // --- LEITURA COM PROTEÇÃO CONTRA BACKUPS ANTIGOS ---
                 dataInicio: ben['dataInicio'] != null
                     ? DateTime.parse(ben['dataInicio'])
                     : DateTime(2000, 1, 1),
@@ -582,6 +583,8 @@ class DataBackupService {
           tenantId: userCtx['empresaId'],
           criadoPor: userCtx['uid'],
           ultimaSincronizacao: agora,
+          // ✅ NOVO: Restaura o campo de forma segura
+          novaUcConcessionaria: uMap['novaUcConcessionaria'],
         );
         await boxUsinas.add(nova);
         await SyncQueueService.enqueue('usinas', nova.id);
@@ -603,7 +606,6 @@ class DataBackupService {
           custoDemandaR: (lMap['custoDemandaR'] as num).toDouble(),
           leituraInversor: (lMap['leituraInversor'] as num?)?.toDouble(),
           observacao: lMap['observacao'],
-          // --- LEITURA DOS NOVOS CAMPOS DA IA (COM PROTEÇÃO CONTRA BACKUPS ANTIGOS) ---
           grupoTarifario: lMap['grupoTarifario'],
           modalidadeTarifaria: lMap['modalidadeTarifaria'],
           tarifaTeUnica: (lMap['tarifaTeUnica'] as num?)?.toDouble(),
@@ -618,7 +620,6 @@ class DataBackupService {
           multaReativo: (lMap['multaReativo'] as num?)?.toDouble(),
           saldoInformadoNaFatura: (lMap['saldoInformadoNaFatura'] as num?)
               ?.toDouble(),
-          // ----------------------------------------------------------------------------
           tenantId: userCtx['empresaId'],
           criadoPor: userCtx['uid'],
           ultimaModificacao: agora,
