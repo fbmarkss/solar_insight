@@ -1087,7 +1087,7 @@ class _UsinaDetalhesScreenState extends State<UsinaDetalhesScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    'Créditos não compensados (Desvio)',
+                    'Créditos não compensados (Histórico total)',
                     style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                   ),
                 ),

@@ -1,5 +1,8 @@
 // Caminho: lib/widgets/usina/modal_detalhes_fatura_widget.dart
 // Descrição: BottomSheet para exibir o detalhamento da fatura usando o DTO ProcessamentoCiclo.
+// Versão: V4.4
+// - ATUALIZADO: Remoção do "Total Teórico" redundante.
+// - ADICIONADO: Exibição do "Direito pela Regra ANEEL" e herança visual do erro da Usina Mãe.
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -14,7 +17,6 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
   final ProcessamentoCiclo ciclo;
   final VoidCallback onEdit;
 
-  // Formatadores
   final NumberFormat _numero = NumberFormat.decimalPattern('pt_BR');
   final NumberFormat _moeda = NumberFormat.currency(
     locale: 'pt_BR',
@@ -29,7 +31,6 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
     required this.onEdit,
   });
 
-  // Função helper estática para chamar o bottom sheet
   static void mostrar(
     BuildContext context,
     Usina usina,
@@ -100,7 +101,7 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
                       tooltip: 'Editar Lançamento',
                       onPressed: () {
                         Navigator.pop(context);
-                        onEdit(); // Chama a função passada pelo pai
+                        onEdit();
                       },
                     ),
                     IconButton(
@@ -120,9 +121,6 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ==========================================
-                  // 1. DADOS DE GERAÇÃO (Apenas Geradoras)
-                  // ==========================================
                   if (usina.isGeradora) ...[
                     _buildSectionHeader('Produção Local', Icons.solar_power),
                     _buildDetailRow(
@@ -143,9 +141,6 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
                     const Divider(height: 30),
                   ],
 
-                  // ==========================================
-                  // 2. RECEBIMENTO E CONSUMO (Todas)
-                  // ==========================================
                   _buildSectionHeader('Consumo e Créditos', Icons.receipt_long),
                   _buildDetailRow(
                     'Consumo Registrado (Rede)',
@@ -158,6 +153,67 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
                       '${_numero.format(ciclo.recebidoDeTerceiros)} kWh',
                       colorValue: Colors.green.shade700,
                     ),
+
+                  // ★ AQUI: A auditoria limpa e herdada
+                  if (!usina.isGeradora &&
+                      ciclo.origensCreditoTeorico.isNotEmpty) ...[
+                    const Divider(height: 16, indent: 20, endIndent: 20),
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Auditoria de Repasse (Mãe vs Filha):',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ),
+                    ...ciclo.origensCreditoTeorico.map((c) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildDetailRow(
+                            'Direito pela Regra ANEEL (Origem: ${c['nome']})',
+                            '${_numero.format(c['valor'])} kWh',
+                            colorValue: Colors.blueGrey.shade800,
+                            boldValue: true,
+                          ),
+                          if (c['erroOrigem'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                left: 12,
+                                bottom: 8,
+                                top: 2,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.subdirectory_arrow_right,
+                                    size: 16,
+                                    color: Colors.red.shade400,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      c['erroOrigem'],
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.red.shade700,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      );
+                    }),
+                    const Divider(height: 16, indent: 20, endIndent: 20),
+                  ],
+
                   _buildDetailRow(
                     'Custo de Disponibilidade (Retido)',
                     '${_numero.format(ciclo.taxaMinimaRetida)} kWh',
@@ -197,9 +253,6 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
                   ),
                   const Divider(height: 30),
 
-                  // ==========================================
-                  // 3. BALANÇO FINANCEIRO / ESTOQUE
-                  // ==========================================
                   _buildSectionHeader('Balanço do Mês', Icons.balance),
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -280,9 +333,6 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
                     ),
                   ),
 
-                  // ==========================================
-                  // 4. ALERTAS E AUDITORIA (Dinâmico do Motor)
-                  // ==========================================
                   if (ciclo.alertas.isNotEmpty) ...[
                     const SizedBox(height: 30),
                     _buildSectionHeader(
@@ -303,7 +353,6 @@ class ModalDetalhesFaturaWidget extends StatelessWidget {
     );
   }
 
-  // --- Helpers de Construção Visual ---
   Widget _buildSectionHeader(String title, IconData icon) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),

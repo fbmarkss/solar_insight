@@ -1,6 +1,7 @@
 // Caminho: lib/screens/visao_geral_screen.dart
 // Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real, Gráfico e Alertas.
-// Versão: V4.0 — ALINHADO AO MOTOR DTO (Preparado para os cálculos GD II).
+// Versão: V4.1 — ALINHADO AO MOTOR DTO COM MÊS DINÂMICO NOS ALERTAS.
+// - ADICIONADO: O nome do mês de referência agora aparece no título das Notificações.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -633,7 +634,11 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                         ],
                       ),
                       const SizedBox(height: 24),
-                      _buildAlertasSection(alertasCompletos),
+                      // ★ AQUI: Passamos a string do mês para a seção WEB
+                      _buildAlertasSection(
+                        alertasCompletos,
+                        dash.nomeMesReferencia,
+                      ),
                     ],
                   ),
                 ),
@@ -736,11 +741,12 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           cardAmbiental,
           const SizedBox(height: 24),
           if (alertasCompletos.isNotEmpty) ...[
-            const Padding(
-              padding: EdgeInsets.only(left: 4, bottom: 12),
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 12),
               child: Text(
-                'NOTIFICAÇÕES E ALERTAS',
-                style: TextStyle(
+                // ★ AQUI: Injetamos o nome do mês diretamente no texto da seção MOBILE
+                'NOTIFICAÇÕES E ALERTAS (${dash.nomeMesReferencia})',
+                style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   color: Colors.blueGrey,
                   fontSize: 11,
@@ -756,8 +762,34 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
+  // --- RESTO DOS MÉTODOS DE WIDGETS ---
+
+  // ★ AQUI: A função agora recebe o parâmetro do mês dinâmico e o exibe no título
+  Widget _buildAlertasSection(
+    List<Map<String, dynamic>> alertas,
+    String mesReferencia,
+  ) {
+    if (alertas.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Notificações de Gestão ($mesReferencia)',
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+            color: Colors.blueGrey,
+          ),
+        ),
+        const SizedBox(height: 16),
+        ...alertas.map((alerta) => _buildModernAlertCard(alerta)),
+      ],
+    );
+  }
+
   Widget _buildClimaCard() {
     return Container(
+      // ... (Restante do método inalterado)
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -1009,25 +1041,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildAlertasSection(List<Map<String, dynamic>> alertas) {
-    if (alertas.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Notificações de Gestão',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
-            color: Colors.blueGrey,
-          ),
-        ),
-        const SizedBox(height: 16),
-        ...alertas.map((alerta) => _buildModernAlertCard(alerta)),
-      ],
     );
   }
 

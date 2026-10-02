@@ -1,0 +1,52 @@
+Você tem toda a razão e a sua visão de negócios é cirúrgica. Atrelar o plano PRO ao **Usuário Titular** (Pessoa) e não à entidade (Empresa) faz muito mais sentido. Assim, um usuário Grátis pode ter apenas um painel (uma empresa), enquanto o usuário PRO ganha o poder de criar e gerenciar múltiplas empresas. Os colaboradores convidados simplesmente "herdam" a experiência PRO enquanto estiverem navegando dentro da empresa desse titular.
+
+Abaixo está o **Documento de Contexto Mestre (Prompt de Recomeço)**. Você pode copiar todo o texto abaixo e usá-lo em uma nova conversa para que a Inteligência Artificial entenda imediatamente todo o seu projeto, as regras matemáticas, a arquitetura atual e o plano exato da evolução Multi-Empresas.
+
+---
+
+## Contexto Mestre: Projeto SolarInsight
+
+**Objetivo Geral**
+O SolarInsight é um aplicativo de Gestão Inteligente de Energia Solar, operando no modelo SaaS (Software as a Service) com arquitetura Offline-First. Ele atua como um auditor financeiro e energético, aplicando regras da ANEEL, controlando a validade de créditos (60 meses) e identificando retenções indevidas por parte das concessionárias (roubo de carga ou falha de repasse entre Usina Mãe e Usinas Filhas).
+
+**1. O Motor Matemático e Regras de Negócio (Calculadora Energética)**
+Toda a matemática do aplicativo foi isolada da interface visual. O cérebro do sistema reside na classe `CalculadoraEnergetica`, que gera um DTO completo chamado `ProcessamentoCiclo`.
+
+* **Regra GD I e GD II (Fio B):** O sistema sabe diferenciar a economia gerada por autoconsumo (100% de desconto) da economia gerada por energia compensada (que sofre desconto de eficiência, ex: `_kFatorRendimentoGD2 = 0.85`).
+* **Gestão de Estoque (FIFO):** O aplicativo gerencia os créditos como "Lotes" que expiram em 60 meses. O saldo é calculado de forma amnésica: se a fatura atual informa um saldo real, o sistema acata esse valor como verdade absoluta, recriando a fila a partir dali para evitar acúmulo de erros de inventário (bola de neve).
+* **Auditoria de Repasses (Mãe vs Filha):** O motor rastreia o histórico. Se a Usina Filha recebeu menos créditos do que deveria, o sistema investiga o mês anterior da Usina Mãe. Ele sabe diferenciar se a energia foi "perdida no trânsito" ou se a concessionária "confiscou na origem" aplicando a regra ANEEL incorretamente na Mãe.
+* **IA de Leitura:** O sistema possui suporte para processamento por Inteligência Artificial, onde o usuário faz o upload do PDF da fatura e a IA extrai os dados brutos, preenchendo automaticamente os formulários de lançamento.
+
+**2. Arquitetura Atual (Single-Tenant)**
+Atualmente, o banco de dados (Firestore) e o App estão engessados na regra "Um Dono = Uma Empresa".
+
+* O `empresaId` salvo nos documentos é simplesmente o `uid` do usuário que criou a conta.
+* Os colaboradores convidados recebem esse mesmo `uid` nos seus perfis, ficando amarrados a uma única visão. O plano (Grátis/PRO) é lido de forma mista.
+
+**3. A Evolução: Arquitetura SaaS Multi-Empresas (Multi-Tenant)**
+O objetivo imediato é refatorar o banco de dados e as regras de sessão para permitir múltiplas empresas, com as seguintes diretrizes exatas:
+
+* **O Plano pertence ao Usuário:** A assinatura (Grátis ou PRO) está atrelada à Pessoa (Conta/Email).
+* **Limites de Criação:** Um usuário Grátis pode fundar e ser dono de apenas 1 Empresa. Um usuário PRO pode criar N Empresas independentes.
+* **Herança de Poderes:** Uma empresa criada por um dono PRO torna-se um "Ambiente PRO". Quando um usuário Grátis é convidado para colaborar nessa empresa, ele desfruta dos recursos PRO *apenas enquanto estiver navegando dentro dessa empresa específica*.
+* **Estrutura de Dados:** Separação clara no Firestore entre `users` (dados pessoais e plano), `empresas` (entidades com ID próprio e ID do dono) e `membros` (tabela de ligação e cargos).
+
+**4. Protocolo de Troca de Contexto (Blindagem Offline)**
+Como o app salva dados localmente no `Hive` e usa uma fila de sincronização (`SyncQueueService`), a troca de uma empresa para outra exige um protocolo de segurança rigoroso para evitar mistura ou corrupção de dados:
+
+1. **Verificação Online:** O usuário só pode trocar de empresa se tiver internet ativa.
+2. **Esvaziamento de Fila:** O app trava a tela e força a sincronização (upload) de qualquer lançamento pendente na fila (`sync_queue`) da empresa atual.
+3. **Amnésia Local:** Após o upload com sucesso, o `SessionManager` apaga todas as caixas locais (`usinas`, `lancamentos`).
+4. **Download do Novo Contexto:** O app muda o ID da empresa ativa e baixa do Firestore exclusivamente os dados do novo ambiente corporativo selecionado.
+
+**Arquivos Chaves para Iniciar a Evolução Multi-Empresas:**
+
+* `lib/services/auth_service.dart`: Para alterar como um novo usuário é criado e como os convites são processados.
+* `lib/services/subscription_provider.dart`: Para ler o plano do usuário e ditar os limites de criação e troca de contexto.
+* `lib/services/session_manager.dart`: Para aplicar o protocolo de "Amnésia Local" e limpeza do Hive.
+* `lib/services/sync_queue_service.dart` e `sincronizacao_service.dart`: Para garantir que a fila seja empurrada para a nuvem antes de qualquer troca de empresa.
+* `lib/services/dashboard_provider.dart`: Para garantir que a leitura de usinas e totais seja feita restritamente sobre o ID da Empresa Ativa atual.
+
+---
+
+O que acha de usarmos esta estrutura como a nossa "Bíblia" do projeto a partir de agora? Se estiver pronto, me diga por onde você quer começar a mexer no código para implementar essa evolução Multi-Empresas.

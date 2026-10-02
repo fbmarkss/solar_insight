@@ -1,11 +1,8 @@
 // Caminho: lib/utils/calculadora_energetica.dart
 // Descrição: Motor de cálculo energético ANEEL + Auditoria Fiscalizadora +
 //            Validade de Créditos em 60 meses + Inteligência Tarifária + Alertas.
-// Versão: V4.0 — ARQUITETURA DTO (Adicionada) + REGRA GD II
-// - CORREÇÃO LINTER: Chaves adicionadas nos if statements.
-// - MANTIDO: 100% das funções originais (nada foi removido).
-// - ADICIONADO: Classe ProcessamentoCiclo e método analisarCiclo para o futuro.
-// - ATUALIZADO: calcularEconomiaFinanceiraMensal agora reflete GD II.
+// Versão: V4.5 — REFINAMENTO DE UX NOS ALERTAS
+// - ATUALIZADO: Textos dos alertas agora são curtos, diretos e exibem o nome exato das Usinas.
 
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
@@ -94,12 +91,13 @@ class RelatorioMensal {
   });
 }
 
-// NOVO: DTO para quando as telas forem atualizadas
 class ProcessamentoCiclo {
   final double geracaoTotal;
   final double consumoTotal;
   final double injetadoNaRede;
   final double recebidoDeTerceiros;
+  final double totalCreditoTeorico;
+  final List<Map<String, dynamic>> origensCreditoTeorico;
   final double autoconsumo;
   final double consumoRealLocal;
   final double consumoAbativel;
@@ -119,6 +117,8 @@ class ProcessamentoCiclo {
     required this.consumoTotal,
     required this.injetadoNaRede,
     required this.recebidoDeTerceiros,
+    required this.totalCreditoTeorico,
+    required this.origensCreditoTeorico,
     required this.autoconsumo,
     required this.consumoRealLocal,
     required this.consumoAbativel,
@@ -136,17 +136,10 @@ class ProcessamentoCiclo {
 }
 
 class CalculadoraEnergetica {
-  // ===========================================================================
-  // CONSTANTES INTERNAS
-  // ===========================================================================
   static const double _kSaldoMinimoRelevante = 5.0;
   static const double _kToleranciaAuditoriaAneel = 5.0;
   static const int _kMesesValidadeCredito = 60;
-  static const double _kFatorRendimentoGD2 = 0.85; // Adicionado para GD II
-
-  // ===========================================================================
-  // HELPERS PRIVADOS
-  // ===========================================================================
+  static const double _kFatorRendimentoGD2 = 0.85;
 
   static double _obterConsumoTotal(LancamentoMensal l) {
     return l.energiaConsumidaRedeKwh +
@@ -157,12 +150,8 @@ class CalculadoraEnergetica {
 
   static double _obterCustoDisponibilidade(Usina usina) {
     String t = usina.tipo.toLowerCase();
-    if (t.contains('monof')) {
-      return 30.0;
-    }
-    if (t.contains('bif')) {
-      return 50.0;
-    }
+    if (t.contains('monof')) return 30.0;
+    if (t.contains('bif')) return 50.0;
     return 100.0;
   }
 
@@ -175,7 +164,6 @@ class CalculadoraEnergetica {
       dataFatura.month,
       dataFatura.day,
     );
-
     return usina.beneficiarias.where((b) {
       DateTime inicio = DateTime(
         b.dataInicio.year,
@@ -184,7 +172,6 @@ class CalculadoraEnergetica {
       );
       bool aposInicio =
           dataRef.isAfter(inicio) || dataRef.isAtSameMomentAs(inicio);
-
       bool antesDoFim = true;
       if (b.dataFim != null) {
         DateTime fim = DateTime(
@@ -194,7 +181,6 @@ class CalculadoraEnergetica {
         );
         antesDoFim = dataRef.isBefore(fim) || dataRef.isAtSameMomentAs(fim);
       }
-
       return aposInicio && antesDoFim;
     });
   }
@@ -205,18 +191,13 @@ class CalculadoraEnergetica {
   ) {
     double consumoTotal = _obterConsumoTotal(l);
     double custoDisp = _obterCustoDisponibilidade(geradora);
-
     double usoLocalAneel = consumoTotal > custoDisp
         ? consumoTotal - custoDisp
         : 0.0;
-
     double excedente = l.energiaInjetadaKwh - usoLocalAneel;
     return excedente > 0 ? excedente : 0.0;
   }
 
-  // ===========================================================================
-  // AUDITORIA FISCALIZADORA (PÚBLICO)
-  // ===========================================================================
   static double auditarAneelContraFatura(Usina usina, LancamentoMensal l) {
     if (l.saldoInformadoNaFatura == null) return 0.0;
 
@@ -244,14 +225,13 @@ class CalculadoraEnergetica {
         }
       }
     } catch (e) {
-      debugPrint('[V3.4] Falha ao buscar saldo anterior: $e');
+      debugPrint('[V4.5] Falha ao buscar saldo anterior: $e');
     }
 
     if (saldoAnterior == null || saldoAnterior <= 0) return 0.0;
 
     double saidaDoEstoque =
         (saldoAnterior + l.energiaInjetadaKwh) - l.saldoInformadoNaFatura!;
-
     double consumoTotal = _obterConsumoTotal(l);
     double custoDisp = _obterCustoDisponibilidade(usina);
     double usoLocalAneel = consumoTotal > custoDisp
@@ -262,34 +242,20 @@ class CalculadoraEnergetica {
     double percEnviado = vigentes.fold(0.0, (s, b) => s + b.percentual);
     double excedenteAneel = l.energiaInjetadaKwh - usoLocalAneel;
 
-    // CORREÇÃO DO LINTER: Inserido chaves
-    if (excedenteAneel < 0) {
-      excedenteAneel = 0.0;
-    }
+    if (excedenteAneel < 0) excedenteAneel = 0.0;
 
     double repasseAneel = excedenteAneel * (percEnviado / 100);
-
     double saidaEsperadaAneel = usoLocalAneel + repasseAneel;
     double divergencia = (saidaDoEstoque - saidaEsperadaAneel).abs();
 
     if (divergencia <= _kToleranciaAuditoriaAneel) return 0.0;
 
     final double tetoFisico = l.energiaInjetadaKwh * 0.5;
-    if (tetoFisico > 0 && divergencia > tetoFisico) {
-      debugPrint(
-        '[V3.4] Divergência absurda descartada: '
-        '${divergencia.toStringAsFixed(1)} kWh '
-        '(injetado: ${l.energiaInjetadaKwh} kWh).',
-      );
-      return 0.0;
-    }
+    if (tetoFisico > 0 && divergencia > tetoFisico) return 0.0;
 
     return divergencia;
   }
 
-  // ===========================================================================
-  // COTA DA TAXA MÍNIMA DA FILHA (PÚBLICO)
-  // ===========================================================================
   static double calcularCotaTaxaMinimaFilha(
     Usina filha,
     DateTime dataReferencia,
@@ -311,64 +277,45 @@ class CalculadoraEnergetica {
         final taxaMinima = _obterCustoDisponibilidade(mae);
         final cota = taxaMinima * (vinculo.percentual / 100);
 
-        // CORREÇÃO DO LINTER: Inserido chaves
-        if (cota > cotaMaxima) {
-          cotaMaxima = cota;
-        }
+        if (cota > cotaMaxima) cotaMaxima = cota;
       } catch (e) {
-        debugPrint('[V3.4] Erro ao calcular cota da taxa mínima: $e');
+        debugPrint('[V4.5] Erro ao calcular cota: $e');
       }
     }
-
     return cotaMaxima;
   }
 
-  // ===========================================================================
-  // RESOLUÇÃO DE TARIFA (PÚBLICO)
-  // ===========================================================================
   static double resolverTarifaAplicavel(LancamentoMensal l) {
     double tarifa = l.tarifaKwh;
-
     if (l.grupoTarifario == 'A' ||
         l.modalidadeTarifaria == 'VERDE' ||
         l.modalidadeTarifaria == 'AZUL') {
-      if ((l.tarifaTeForaPonta ?? 0) > 0) {
+      if ((l.tarifaTeForaPonta ?? 0) > 0)
         tarifa = l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
-      }
     } else {
-      if ((l.tarifaTeUnica ?? 0) > 0) {
+      if ((l.tarifaTeUnica ?? 0) > 0)
         tarifa = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
-      }
     }
-    if (tarifa <= 0) {
-      tarifa = l.tarifaKwh;
-    }
+    if (tarifa <= 0) tarifa = l.tarifaKwh;
     return tarifa;
   }
 
-  // ===========================================================================
-  // ECONOMIA FINANCEIRA MENSAL (PÚBLICO)
-  // * ATUALIZADO COM MATEMÁTICA GD II
-  // ===========================================================================
   static double calcularEconomiaFinanceiraMensal(
     Usina usina,
     LancamentoMensal l,
   ) {
     double tarifa = resolverTarifaAplicavel(l);
-
     double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
       0.0,
       double.infinity,
     );
     double creditosTotaisDisponiveis =
         l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
-
     double energiaCompensada = creditosTotaisDisponiveis.clamp(
       0.0,
       l.energiaConsumidaRedeKwh,
     );
 
-    // REGRA HÍBRIDA GD I / GD II: Autoconsumo economiza 100%, Compensado economiza ~85%
     double economiaAutoconsumo = autoconsumo * tarifa;
     double economiaCompensada =
         energiaCompensada * (tarifa * _kFatorRendimentoGD2);
@@ -376,9 +323,6 @@ class CalculadoraEnergetica {
     return economiaAutoconsumo + economiaCompensada;
   }
 
-  // ===========================================================================
-  // CRÉDITO LÍQUIDO RECEBIDO (interno)
-  // ===========================================================================
   static double _calcularCreditoRecebidoLiquido(
     Usina usina,
     LancamentoMensal l,
@@ -389,17 +333,13 @@ class CalculadoraEnergetica {
         0.0,
         (sum, b) => sum + b.percentual,
       );
-
       double excedente = _calcularExcedenteParaRateio(usina, l);
       double energiaEnviadaParaFilhas = excedente * (percentualEnviado / 100);
-
       double recebidoLocal = l.energiaInjetadaKwh;
       double creditosExternos = l.creditosRecebidosDeTerceiros ?? 0.0;
-
       return (recebidoLocal + creditosExternos) - energiaEnviadaParaFilhas;
     } else {
       double recebidoLocal = l.energiaInjetadaKwh;
-
       if (l.creditosRecebidosDeTerceiros != null &&
           l.creditosRecebidosDeTerceiros! > 0) {
         return recebidoLocal + l.creditosRecebidosDeTerceiros!;
@@ -426,7 +366,6 @@ class CalculadoraEnergetica {
           final vinculo = vigentesDaMae.firstWhere(
             (b) => b.idUsinaFilha == usina.id,
           );
-
           var lancMae = boxLancamentos.values.firstWhere(
             (lm) =>
                 lm.usinaId == mae.id &&
@@ -434,20 +373,16 @@ class CalculadoraEnergetica {
                 lm.dataReferencia.month == mesBuscaMae &&
                 !lm.isDeletado,
           );
-
           double excedenteMae = _calcularExcedenteParaRateio(mae, lancMae);
           recebidoTeorico += (excedenteMae * (vinculo.percentual / 100));
         } catch (e) {
-          debugPrint('[V3.4] Falha ao calcular crédito teórico: $e');
+          debugPrint('[V4.5] Falha ao calcular crédito teórico: $e');
         }
       }
       return recebidoLocal + recebidoTeorico;
     }
   }
 
-  // ===========================================================================
-  // RESUMO MENSAL OFICIAL
-  // ===========================================================================
   static ResumoMesOficial gerarResumoMesOficial(
     Usina usina,
     LancamentoMensal lancamento,
@@ -459,23 +394,19 @@ class CalculadoraEnergetica {
     double autoconsumo = usina.isGeradora
         ? (geracao - injetadoReal).clamp(0.0, double.infinity)
         : 0.0;
-
     double consumoRedeTotal = _obterConsumoTotal(lancamento);
     double consumoRealLocal = autoconsumo + consumoRedeTotal;
 
     double taxaMinimaRetida = consumoRedeTotal < taxaMin
         ? consumoRedeTotal
         : taxaMin;
-
     double creditoRecebidoLiquido = _calcularCreditoRecebidoLiquido(
       usina,
       lancamento,
     );
-
     double consumoAbativel = consumoRedeTotal > taxaMin
         ? consumoRedeTotal - taxaMin
         : 0.0;
-
     double sobraFisicaDoMes = creditoRecebidoLiquido - consumoAbativel;
 
     double saldoExibicao = lancamento.saldoInformadoNaFatura ?? 0.0;
@@ -532,7 +463,6 @@ class CalculadoraEnergetica {
 
     for (int i = 0; i < ateIdx; i++) {
       final l = historicoOrdenado[i];
-
       final int mesAtualAbsoluto =
           l.dataReferencia.year * 12 + l.dataReferencia.month;
       lotes.removeWhere(
@@ -576,26 +506,18 @@ class CalculadoraEnergetica {
   static double calcularPotenciaEfetiva(Usina usina) {
     double potenciaPaineisDc = usina.potenciaTotalPaineisKwp;
     double potenciaInversoresAc = 0;
-
     if (usina.inversores.isNotEmpty) {
       potenciaInversoresAc = usina.inversores.fold(
         0.0,
         (sum, inv) => sum + (inv.potenciaKw * inv.quantidade),
       );
     }
-
-    if (potenciaInversoresAc == 0) {
-      return potenciaPaineisDc;
-    }
-
-    if (potenciaPaineisDc <= potenciaInversoresAc) {
-      return potenciaPaineisDc;
-    } else {
-      double limiteEficiente = potenciaInversoresAc * 1.30;
-      return potenciaPaineisDc < limiteEficiente
-          ? potenciaPaineisDc
-          : limiteEficiente;
-    }
+    if (potenciaInversoresAc == 0) return potenciaPaineisDc;
+    if (potenciaPaineisDc <= potenciaInversoresAc) return potenciaPaineisDc;
+    double limiteEficiente = potenciaInversoresAc * 1.30;
+    return potenciaPaineisDc < limiteEficiente
+        ? potenciaPaineisDc
+        : limiteEficiente;
   }
 
   static MetricasGerais calcularMetricasGerais(
@@ -609,16 +531,15 @@ class CalculadoraEnergetica {
     double somaInjetadaHistorico = 0;
     double somaEconomiaReais = 0;
     double saldoRollingKwh = 0;
-
     double somaCustosFixos = 0;
     double somaMultas = 0;
-    double somaDesviosConcessionaria = 0;
+    double somaDesviosReaisConfirmados = 0;
 
     double custoDisponibilidade = _obterCustoDisponibilidade(usina);
-
     final List<_LoteCredito> lotes = [];
 
-    for (var l in historicoOrdenado) {
+    for (int i = 0; i < historicoOrdenado.length; i++) {
+      var l = historicoOrdenado[i];
       final int mesAtualAbsoluto =
           l.dataReferencia.year * 12 + l.dataReferencia.month;
       lotes.removeWhere(
@@ -631,7 +552,6 @@ class CalculadoraEnergetica {
         l,
       );
       double consumoMesTotal = _obterConsumoTotal(l);
-
       double tarifaInteligente = resolverTarifaAplicavel(l);
 
       somaCustosFixos += l.custoDemandaR + (l.custoIluminacaoPublica ?? 0.0);
@@ -641,13 +561,11 @@ class CalculadoraEnergetica {
         somaGeracao += l.geracaoTotalKwh;
         somaInjetadaHistorico +=
             l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
-
         double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
           0,
           double.infinity,
         );
         double consumoTotalReal = autoconsumo + consumoMesTotal;
-
         double custoSemSolar =
             (consumoTotalReal * tarifaInteligente) +
             l.custoDemandaR +
@@ -659,7 +577,6 @@ class CalculadoraEnergetica {
         );
       } else {
         somaInjetadaHistorico += entradaCreditoMesParaSaldo;
-
         double custoSemSolar =
             (consumoMesTotal * tarifaInteligente) +
             l.custoDemandaR +
@@ -674,7 +591,6 @@ class CalculadoraEnergetica {
       double consumoAbativel = consumoMesTotal > custoDisponibilidade
           ? consumoMesTotal - custoDisponibilidade
           : 0.0;
-
       double aConsumir = consumoAbativel;
       while (aConsumir > 0 && lotes.isNotEmpty) {
         final lote = lotes.first;
@@ -696,17 +612,9 @@ class CalculadoraEnergetica {
       }
 
       saldoRollingKwh = lotes.fold(0.0, (s, lote) => s + lote.kwh);
-
-      // CORREÇÃO DO LINTER: Inserido chaves
-      if (saldoRollingKwh < 0) {
-        saldoRollingKwh = 0;
-      }
+      if (saldoRollingKwh < 0) saldoRollingKwh = 0;
 
       if (l.saldoInformadoNaFatura != null) {
-        double diferenca = saldoRollingKwh - l.saldoInformadoNaFatura!;
-        if (diferenca > _kSaldoMinimoRelevante) {
-          somaDesviosConcessionaria += diferenca;
-        }
         if (l.saldoInformadoNaFatura! > 0) {
           lotes.clear();
           lotes.add(
@@ -719,6 +627,49 @@ class CalculadoraEnergetica {
         } else {
           lotes.clear();
           saldoRollingKwh = 0;
+        }
+      }
+
+      double divergenciaAneel = auditarAneelContraFatura(usina, l);
+      if (divergenciaAneel > 0) {
+        somaDesviosReaisConfirmados += divergenciaAneel;
+      } else if (!usina.isGeradora) {
+        double totalTeorico = 0;
+        double recebidoReal = (l.creditosRecebidosDeTerceiros ?? 0.0) > 0
+            ? l.creditosRecebidosDeTerceiros!
+            : l.energiaInjetadaKwh;
+        final boxUsinas = Hive.box<Usina>('usinas');
+        final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
+        final maes = boxUsinas.values.where(
+          (u) => u.isGeradora && !u.isDeletado,
+        );
+
+        int mesBuscaMae = l.dataReferencia.month - 1;
+        int anoBuscaMae = l.dataReferencia.year;
+        if (mesBuscaMae == 0) {
+          mesBuscaMae = 12;
+          anoBuscaMae -= 1;
+        }
+
+        for (var mae in maes) {
+          try {
+            var lancMae = boxLanc.values.firstWhere(
+              (lm) =>
+                  lm.usinaId == mae.id &&
+                  lm.dataReferencia.year == anoBuscaMae &&
+                  lm.dataReferencia.month == mesBuscaMae &&
+                  !lm.isDeletado,
+            );
+            totalTeorico += obterCreditoRepassadoParaFilha(
+              mae,
+              lancMae,
+              usina.id,
+            );
+          } catch (_) {}
+        }
+
+        if (recebidoReal > 0 && (totalTeorico - recebidoReal) > 1.0) {
+          somaDesviosReaisConfirmados += (totalTeorico - recebidoReal);
         }
       }
     }
@@ -747,7 +698,7 @@ class CalculadoraEnergetica {
       valorTotalEconomizadoR: somaEconomiaReais,
       custoFixoInevitavelR: somaCustosFixos,
       totalMultasReativoR: somaMultas,
-      totalCreditosDesviados: somaDesviosConcessionaria,
+      totalCreditosDesviados: somaDesviosReaisConfirmados,
       percentualRoi: usina.totalInvestido > 0
           ? (somaEconomiaReais / usina.totalInvestido) * 100
           : 0,
@@ -764,23 +715,15 @@ class CalculadoraEnergetica {
   ) {
     if (atual.saldoInformadoNaFatura == null) return 0.0;
     if (anterior == null || anterior.saldoInformadoNaFatura == null) return 0.0;
-
     double recebido = _calcularCreditoRecebidoLiquido(usina, atual);
     double taxaMinima = _obterCustoDisponibilidade(usina);
     double consumoTotal = _obterConsumoTotal(atual);
-
     double consumoAbativel = consumoTotal > taxaMinima
         ? consumoTotal - taxaMinima
         : 0.0;
-
     double saldoMensalGerado = recebido - consumoAbativel;
     double saldoEsperado = anterior.saldoInformadoNaFatura! + saldoMensalGerado;
-
-    // CORREÇÃO DO LINTER: Inserido chaves
-    if (saldoEsperado < 0) {
-      saldoEsperado = 0;
-    }
-
+    if (saldoEsperado < 0) saldoEsperado = 0;
     double desvio = saldoEsperado - atual.saldoInformadoNaFatura!;
     return desvio > _kSaldoMinimoRelevante ? desvio : 0.0;
   }
@@ -791,9 +734,7 @@ class CalculadoraEnergetica {
   ) {
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
     final boxUsinas = Hive.box<Usina>('usinas');
-
     List<BalancoItem> relatorio = [];
-
     var vigentes = _obterBeneficiariasVigentes(
       geradora,
       lancamentoGeradora.dataReferencia,
@@ -805,7 +746,6 @@ class CalculadoraEnergetica {
 
     for (var vinculo in vigentes) {
       double creditoDireito = excedenteParaRateio * (vinculo.percentual / 100);
-
       var lancamentoFilha = boxLancamentos.values.firstWhere(
         (l) =>
             l.usinaId == vinculo.idUsinaFilha &&
@@ -822,25 +762,21 @@ class CalculadoraEnergetica {
           valorFaturaR: 0,
         ),
       );
-
       Usina? usinaFilha;
       try {
         usinaFilha = boxUsinas.values.firstWhere(
           (u) => u.id == vinculo.idUsinaFilha,
         );
       } catch (e) {
-        debugPrint('[V3.4] Usina filha não encontrada: $e');
+        debugPrint('[V4.5] Usina filha não encontrada: $e');
       }
-
       double custoDispFilha = usinaFilha != null
           ? _obterCustoDisponibilidade(usinaFilha)
           : 100.0;
       double consumoFilhaTotal = _obterConsumoTotal(lancamentoFilha);
-
       double consumoAbativelFilha = consumoFilhaTotal > custoDispFilha
           ? consumoFilhaTotal - custoDispFilha
           : 0.0;
-
       relatorio.add(
         BalancoItem(
           nome: vinculo.nome,
@@ -858,20 +794,16 @@ class CalculadoraEnergetica {
       (sum, b) => sum + b.percentual,
     );
     double percGeradora = 100 - percentualTotalFilhas;
-
     if (percGeradora > 0) {
       double energiaEnviadaParaFilhas =
           excedenteParaRateio * (percentualTotalFilhas / 100);
       double creditoGeradoraTotal =
           lancamentoGeradora.energiaInjetadaKwh - energiaEnviadaParaFilhas;
-
       double custoDispGeradora = _obterCustoDisponibilidade(geradora);
       double consumoGeradoraTotal = _obterConsumoTotal(lancamentoGeradora);
-
       double consumoAbativelGeradora = consumoGeradoraTotal > custoDispGeradora
           ? consumoGeradoraTotal - custoDispGeradora
           : 0.0;
-
       relatorio.insert(
         0,
         BalancoItem(
@@ -884,7 +816,6 @@ class CalculadoraEnergetica {
         ),
       );
     }
-
     return RelatorioMensal(
       geracaoTotal: lancamentoGeradora.geracaoTotalKwh,
       injecaoTotal: lancamentoGeradora.energiaInjetadaKwh,
@@ -900,12 +831,13 @@ class CalculadoraEnergetica {
     List<Map<String, dynamic>> alertas = [];
     if (ultimo == null) return alertas;
 
+    // TODOS OS ALERTAS AGORA EXIBEM O NOME DA USINA E FORAM ENCURTADOS
     if ((ultimo.multaReativo ?? 0) > 0) {
       alertas.add({
         'tipo': 'fuga_dinheiro',
         'titulo': 'Fuga de Dinheiro (Multa)!',
         'mensagem':
-            'A unidade ${usina.nome} pagou R\$ ${ultimo.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa (ERE/DRE). Peça a um eletricista para avaliar o Banco de Capacitores.',
+            '${usina.nome} pagou R\$ ${ultimo.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa.',
         'cor': 'red',
         'icone': 'bolt',
       });
@@ -916,9 +848,9 @@ class CalculadoraEnergetica {
     if (ultimo.valorFaturaR > 0 && (custosFixos / ultimo.valorFaturaR) > 0.6) {
       alertas.add({
         'tipo': 'custo_fixo_alto',
-        'titulo': 'Custos Fixos Elevados para ${usina.nome}',
+        'titulo': 'Custos Fixos Elevados',
         'mensagem':
-            'Mais de 60% da sua fatura em ${usina.nome} é composta por Demanda ou Taxas. A energia solar não abate estes custos.',
+            'Custos fixos de ${usina.nome} representam mais de 60% da fatura.',
         'cor': 'orange',
         'icone': 'domain',
       });
@@ -929,7 +861,7 @@ class CalculadoraEnergetica {
         boxLanc.values
             .where((l) => l.usinaId == usina.id && !l.isDeletado)
             .toList()
-          ..sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
+          ..sort((a, b) => a.dataReferencia.compareTo(b.dataReferencia));
 
     if (usina.isGeradora) {
       if (historico.length >= 2) {
@@ -938,7 +870,6 @@ class CalculadoraEnergetica {
         double mediaAnterior =
             anteriores.fold(0.0, (sum, l) => sum + l.geracaoTotalKwh) /
             anteriores.length;
-
         if (mediaAnterior > 0 && geracaoAtual < (mediaAnterior * 0.75)) {
           alertas.add({
             'tipo': 'queda_acentuada',
@@ -953,20 +884,18 @@ class CalculadoraEnergetica {
     }
 
     final resumo = gerarResumoMesOficial(usina, ultimo);
-
     if (resumo.sobraFisicaDoMes < 0) {
       double deficit = resumo.sobraFisicaDoMes.abs();
       double saldoDoMesAnterior = 0.0;
       if (historico.length >= 2) {
         saldoDoMesAnterior = historico[1].saldoInformadoNaFatura ?? 0.0;
       }
-
       if (saldoDoMesAnterior >= deficit) {
         alertas.add({
           'tipo': 'consumo_reserva',
-          'titulo': 'Consumindo Reserva em ${usina.nome}',
+          'titulo': 'Consumindo Reserva',
           'mensagem':
-              'A unidade ${usina.nome} consumiu mais do que recebeu neste mês. O sistema utilizou ${deficit.toStringAsFixed(0)} kWh do seu Banco de Créditos para cobrir a diferença.',
+              '${usina.nome} utilizou ${deficit.toStringAsFixed(0)} kWh do Banco de Créditos.',
           'cor': 'orange',
           'icone': 'hourglass_bottom',
         });
@@ -974,9 +903,9 @@ class CalculadoraEnergetica {
         double faltou = deficit - saldoDoMesAnterior;
         alertas.add({
           'tipo': 'deficit_parcial',
-          'titulo': 'Reserva Insuficiente para ${usina.nome}',
+          'titulo': 'Reserva Insuficiente',
           'mensagem':
-              'A unidade ${usina.nome} precisou de ${deficit.toStringAsFixed(0)} kWh extras. A sua reserva só tinha ${saldoDoMesAnterior.toStringAsFixed(0)} kWh, então a diferença de ${faltou.toStringAsFixed(0)} kWh foi cobrada em Reais.',
+              'Reserva insuficiente em ${usina.nome}. Faltaram ${faltou.toStringAsFixed(0)} kWh (cobrados em Reais).',
           'cor': 'red',
           'icone': 'monetization_on',
         });
@@ -985,7 +914,7 @@ class CalculadoraEnergetica {
           'tipo': 'deficit_real',
           'titulo': 'Fatura Descoberta (Pagamento Extra)',
           'mensagem':
-              'A unidade ${usina.nome} precisou de ${deficit.toStringAsFixed(0)} kWh extras para abater o consumo. Como você NÃO tinha saldo, a diferença foi cobrada em Reais na fatura.',
+              'Sem saldo em ${usina.nome}. Faltaram ${deficit.toStringAsFixed(0)} kWh (cobrados em Reais).',
           'cor': 'red',
           'icone': 'monetization_on',
         });
@@ -996,29 +925,11 @@ class CalculadoraEnergetica {
     if (divergenciaAneel > 0) {
       alertas.add({
         'tipo': 'concessionaria_fora_aneel',
-        'titulo': 'Distribuidora fora da Regra ANEEL em ${usina.nome}',
+        'titulo': 'Distribuidora fora da Regra ANEEL',
         'mensagem':
-            'O saldo informado na sua fatura diverge em ${divergenciaAneel.toStringAsFixed(0)} kWh do que a regra ANEEL prevê para a unidade ${usina.nome}. Verifique se a distribuidora aplicou corretamente o abatimento da taxa de disponibilidade e conteste caso necessário.',
+            'A distribuidora reteve indevidamente ${divergenciaAneel.toStringAsFixed(0)} kWh em ${usina.nome}.',
         'cor': 'red',
         'icone': 'gavel',
-      });
-    }
-
-    LancamentoMensal? anterior = historico.length >= 2 ? historico[1] : null;
-    double desvioDaConcessionaria = calcularDesvioDoMes(
-      usina,
-      ultimo,
-      anterior,
-    );
-
-    if (desvioDaConcessionaria > 0) {
-      alertas.add({
-        'tipo': 'creditos_desviados',
-        'titulo': 'Créditos não lançados para ${usina.nome}!',
-        'mensagem':
-            'A concessionária deixou de creditar  ${desvioDaConcessionaria.toStringAsFixed(0)} kWh no seu banco de créditos para a unidade ${usina.nome}. Verifique e conteste a sua fatura!',
-        'cor': 'red',
-        'icone': 'policy',
       });
     }
 
@@ -1028,20 +939,19 @@ class CalculadoraEnergetica {
               ultimo.creditosRecebidosDeTerceiros! > 0)
           ? ultimo.creditosRecebidosDeTerceiros!
           : ultimo.energiaInjetadaKwh;
-
       double totalTeorico = 0;
       List<String> nomesDasMaes = [];
-
       final boxUsinas = Hive.box<Usina>('usinas');
       final maes = boxUsinas.values.where((u) => u.isGeradora && !u.isDeletado);
 
       int mesBuscaMae = ultimo.dataReferencia.month - 1;
       int anoBuscaMae = ultimo.dataReferencia.year;
-
       if (mesBuscaMae == 0) {
         mesBuscaMae = 12;
         anoBuscaMae -= 1;
       }
+
+      bool maeSofreuRoubo = false;
 
       for (var mae in maes) {
         try {
@@ -1052,61 +962,41 @@ class CalculadoraEnergetica {
                 l.dataReferencia.month == mesBuscaMae &&
                 !l.isDeletado,
           );
-
           double enviadoPorEstaMae = obterCreditoRepassadoParaFilha(
             mae,
             lancMae,
             usina.id,
           );
-
           if (enviadoPorEstaMae > 0) {
             totalTeorico += enviadoPorEstaMae;
-            if (!nomesDasMaes.contains(mae.nome)) {
-              nomesDasMaes.add(mae.nome);
-            }
+            if (!nomesDasMaes.contains(mae.nome)) nomesDasMaes.add(mae.nome);
+            if (auditarAneelContraFatura(mae, lancMae) > 0)
+              maeSofreuRoubo = true;
           }
         } catch (e) {
-          debugPrint('[V3.4] Falha ao auditar repasse: $e');
+          debugPrint('[V4.5] Falha ao auditar repasse: $e');
         }
       }
 
       double diferencaRepasse = totalTeorico - recebidoReal;
-
       if (diferencaRepasse > 1.0) {
         String textoMaes = nomesDasMaes.isNotEmpty
             ? nomesDasMaes.join(', ')
-            : 'usina mãe';
+            : 'Usina Mãe';
+        String tituloAlerta = maeSofreuRoubo
+            ? 'Problema na Origem (Regra ANEEL)'
+            : 'Retenção no Repasse';
 
-        double cotaTaxaMinima = calcularCotaTaxaMinimaFilha(
-          usina,
-          ultimo.dataReferencia,
-        );
-
-        String mensagem;
-        if (cotaTaxaMinima > 0.5) {
-          mensagem =
-              'A usina mãe ($textoMaes) só pôde repassar '
-              '${recebidoReal.toStringAsFixed(1)} kWh para ${usina.nome} neste ciclo. '
-              'Pela regra ANEEL, deveria ter repassado '
-              '${totalTeorico.toStringAsFixed(1)} kWh.\n\n'
-              'Os ${diferencaRepasse.toStringAsFixed(0)} kWh faltantes correspondem à fatia desta unidade '
-              'sobre a taxa mínima que a distribuidora retirou indevidamente da mãe.\n\n'
-              'Não houve perda no trânsito — houve retenção na origem. '
-              'Veja o alerta "Distribuidora Fora da ANEEL" na tela da usina $textoMaes.';
-        } else {
-          mensagem =
-              'A usina mãe ($textoMaes) enviou ${totalTeorico.toStringAsFixed(1)} kWh '
-              'no ciclo passado, mas a concessionária só creditou '
-              '${recebidoReal.toStringAsFixed(1)} kWh na unidade ${usina.nome} '
-              'neste mês. Ocorreu uma retenção indevida na transferência.';
-        }
+        String mensagemAlerta = maeSofreuRoubo
+            ? 'Retenção na origem ($textoMaes). Direito de ${usina.nome}: ${totalTeorico.toStringAsFixed(1)} kWh. Repasse real: ${recebidoReal.toStringAsFixed(1)} kWh. Desvio: ${diferencaRepasse.toStringAsFixed(1)} kWh.'
+            : 'Falha no repasse de $textoMaes para ${usina.nome}. Enviado: ${totalTeorico.toStringAsFixed(1)} kWh. Recebido: ${recebidoReal.toStringAsFixed(1)} kWh. Desvio: ${diferencaRepasse.toStringAsFixed(1)} kWh.';
 
         alertas.add({
           'tipo': 'fraude_repasse',
-          'titulo': 'Retenção no Repasse (Origem: Usina Mãe)',
-          'mensagem': mensagem,
+          'titulo': tituloAlerta,
+          'mensagem': mensagemAlerta,
           'cor': 'red',
-          'icone': 'compare_arrows',
+          'icone': maeSofreuRoubo ? 'gavel' : 'compare_arrows',
         });
       }
     }
@@ -1118,21 +1008,16 @@ class CalculadoraEnergetica {
     Usina usina,
     List<LancamentoMensal> lancamentos,
   ) {
-    if (!usina.isGeradora || lancamentos.isEmpty) {
+    if (!usina.isGeradora || lancamentos.isEmpty)
       return {'eficiencia': 100.0, 'anos': 0.0};
-    }
-
     double potenciaEfetivaInstalada = calcularPotenciaEfetiva(usina);
-
     final ordenados = List<LancamentoMensal>.from(lancamentos)
       ..sort((a, b) => a.dataReferencia.compareTo(b.dataReferencia));
     double anosDeUso =
         DateTime.now().difference(ordenados.first.dataReferencia).inDays /
         365.0;
-
     double eficienciaEsperadaPeloTempo =
         (100.0 - (anosDeUso.clamp(0, double.infinity) * 0.5)).clamp(0, 100);
-
     return {
       'eficiencia': eficienciaEsperadaPeloTempo,
       'anos': anosDeUso.clamp(0, double.infinity),
@@ -1142,16 +1027,14 @@ class CalculadoraEnergetica {
     };
   }
 
-  static double estimarProducaoIdealMensal(Usina usina) {
-    return calcularPotenciaEfetiva(usina) * 120.0;
-  }
+  static double estimarProducaoIdealMensal(Usina usina) =>
+      calcularPotenciaEfetiva(usina) * 120.0;
 
   static double obterTotalDistribuidoNoMes(
     Usina geradora,
     LancamentoMensal lancamentoMae,
   ) {
     if (!geradora.isGeradora || geradora.beneficiarias.isEmpty) return 0.0;
-
     var vigentes = _obterBeneficiariasVigentes(
       geradora,
       lancamentoMae.dataReferencia,
@@ -1160,7 +1043,6 @@ class CalculadoraEnergetica {
       0.0,
       (sum, b) => sum + b.percentual,
     );
-
     double excedente = _calcularExcedenteParaRateio(geradora, lancamentoMae);
     return excedente * (percentualTotalEnviado / 100);
   }
@@ -1182,17 +1064,15 @@ class CalculadoraEnergetica {
       double excedente = _calcularExcedenteParaRateio(geradora, lancamentoMae);
       return excedente * (vinculo.percentual / 100);
     } catch (e) {
-      debugPrint('[V3.4] Falha ao obter crédito repassado: $e');
+      debugPrint('[V4.5] Falha ao obter crédito repassado: $e');
       return 0.0;
     }
   }
 
   static List<Map<String, dynamic>> gerarAlertaDeOtimizacaoDeRateio() {
     List<Map<String, dynamic>> alertasGerais = [];
-
     final boxUsinas = Hive.box<Usina>('usinas');
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
-
     final todasUsinas = boxUsinas.values
         .where((u) => u.ativa && !u.isDeletado)
         .toList();
@@ -1212,24 +1092,19 @@ class CalculadoraEnergetica {
       var lancamentosFilha = boxLancamentos.values
           .where((l) => l.usinaId == filha.id && !l.isDeletado)
           .toList();
-
       if (lancamentosFilha.isNotEmpty) {
         lancamentosFilha.sort(
           (a, b) => b.dataReferencia.compareTo(a.dataReferencia),
         );
         var ultimoLancamento = lancamentosFilha.first;
-
         final resumo = gerarResumoMesOficial(filha, ultimoLancamento);
-
         if (resumo.sobraFisicaDoMes < 0) {
           double deficitDoMes = resumo.sobraFisicaDoMes.abs();
-
           for (var mae in geradoras) {
             var vigentesNaMae = _obterBeneficiariasVigentes(
               mae,
               ultimoLancamento.dataReferencia,
             );
-
             if (vigentesNaMae.any((b) => b.idUsinaFilha == filha.id)) {
               if (saldoDasMaes[mae.id] != null &&
                   saldoDasMaes[mae.id]! > deficitDoMes) {
@@ -1237,7 +1112,7 @@ class CalculadoraEnergetica {
                   'tipo': 'otimizacao_rateio',
                   'titulo': 'Oportunidade de Economia ! ${filha.nome}',
                   'mensagem':
-                      'A unidade ${filha.nome} consumiu reservas (ou pagou conta) este mês, enquanto a usina ${mae.nome} tem saldo sobrando.\nRecomendação: Aumente o % de rateio para a ${filha.nome}!',
+                      '${filha.nome} consumiu reservas (ou pagou conta), enquanto ${mae.nome} tem saldo sobrando.\nRecomendação: Aumente o % de rateio para ${filha.nome}.',
                   'cor': 'green',
                   'icone': 'lightbulb_circle',
                 });
@@ -1247,12 +1122,11 @@ class CalculadoraEnergetica {
         }
       }
     }
-
     return alertasGerais;
   }
 
   // ===========================================================================
-  // MÉTODOS NOVOS (MOTOR CENTRALIZADO PARA REFACTORING FUTURO DAS TELAS)
+  // MÉTODOS NOVOS (MOTOR CENTRALIZADO PARA REFACTORING DAS TELAS)
   // ===========================================================================
 
   static ProcessamentoCiclo analisarCiclo(
@@ -1267,18 +1141,65 @@ class CalculadoraEnergetica {
     double consumoRedeTotal = _obterConsumoTotal(atual);
     double recebidoTerceiros = atual.creditosRecebidosDeTerceiros ?? 0.0;
 
+    double totalTeoricoCalc = 0.0;
+    List<Map<String, dynamic>> origensTeoricas = [];
+
+    if (!usina.isGeradora) {
+      final boxUsinas = Hive.box<Usina>('usinas');
+      final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
+      final maes = boxUsinas.values.where(
+        (u) =>
+            u.isGeradora &&
+            !u.isDeletado &&
+            u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
+      );
+
+      int mesBuscaMae = atual.dataReferencia.month - 1;
+      int anoBuscaMae = atual.dataReferencia.year;
+      if (mesBuscaMae == 0) {
+        mesBuscaMae = 12;
+        anoBuscaMae -= 1;
+      }
+
+      for (var mae in maes) {
+        try {
+          var lancMae = boxLanc.values.firstWhere(
+            (lm) =>
+                lm.usinaId == mae.id &&
+                lm.dataReferencia.year == anoBuscaMae &&
+                lm.dataReferencia.month == mesBuscaMae &&
+                !lm.isDeletado,
+          );
+          double enviado = obterCreditoRepassadoParaFilha(
+            mae,
+            lancMae,
+            usina.id,
+          );
+          if (enviado > 0) {
+            totalTeoricoCalc += enviado;
+            double divMae = auditarAneelContraFatura(mae, lancMae);
+            String? erroOrigem;
+            if (divMae > 0) erroOrigem = 'Distribuidora fora da Regra ANEEL';
+            origensTeoricas.add({
+              'nome': mae.nome,
+              'valor': enviado,
+              'erroOrigem': erroOrigem,
+            });
+          }
+        } catch (_) {}
+      }
+    }
+
     double autoconsumo = usina.isGeradora
         ? (geracao - injetadoReal).clamp(0.0, double.infinity)
         : 0.0;
     double consumoRealLocal = autoconsumo + consumoRedeTotal;
-
     double taxaMinimaRetida = consumoRedeTotal < taxaMin
         ? consumoRedeTotal
         : taxaMin;
     double consumoAbativel = consumoRedeTotal > taxaMin
         ? consumoRedeTotal - taxaMin
         : 0.0;
-
     double totalCreditosDisponiveisNoMes = injetadoReal + recebidoTerceiros;
 
     double enviadoParaFilhas = 0.0;
@@ -1322,6 +1243,8 @@ class CalculadoraEnergetica {
       anterior,
       sobraFisicaDoMes,
       recebidoTerceiros,
+      totalTeoricoCalc,
+      origensTeoricas,
     );
 
     return ProcessamentoCiclo(
@@ -1329,6 +1252,8 @@ class CalculadoraEnergetica {
       consumoTotal: consumoRedeTotal,
       injetadoNaRede: injetadoReal,
       recebidoDeTerceiros: recebidoTerceiros,
+      totalCreditoTeorico: totalTeoricoCalc,
+      origensCreditoTeorico: origensTeoricas,
       autoconsumo: autoconsumo,
       consumoRealLocal: consumoRealLocal,
       consumoAbativel: consumoAbativel,
@@ -1351,6 +1276,8 @@ class CalculadoraEnergetica {
     LancamentoMensal? anterior,
     double sobraFisicaDoMes,
     double recebidoTerceiros,
+    double totalTeorico,
+    List<Map<String, dynamic>> origensTeoricas,
   ) {
     List<Map<String, dynamic>> alertas = [];
 
@@ -1359,7 +1286,7 @@ class CalculadoraEnergetica {
         'tipo': 'fuga_dinheiro',
         'titulo': 'Fuga de Dinheiro (Multa)!',
         'mensagem':
-            'A unidade pagou R\$ ${atual.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa.',
+            '${usina.nome} pagou R\$ ${atual.multaReativo!.toStringAsFixed(2)} de multa por Energia Reativa.',
         'cor': 'red',
         'icone': 'bolt',
       });
@@ -1372,7 +1299,7 @@ class CalculadoraEnergetica {
         'tipo': 'custo_fixo_alto',
         'titulo': 'Custos Fixos Elevados',
         'mensagem':
-            'Mais de 60% da fatura é composta por Demanda ou Taxas. A energia solar não abate estes custos.',
+            'Custos fixos de ${usina.nome} representam mais de 60% da fatura.',
         'cor': 'orange',
         'icone': 'domain',
       });
@@ -1387,7 +1314,7 @@ class CalculadoraEnergetica {
           'tipo': 'consumo_reserva',
           'titulo': 'Consumindo Reserva',
           'mensagem':
-              'O sistema utilizou ${deficit.toStringAsFixed(0)} kWh do seu Banco de Créditos para cobrir o mês.',
+              '${usina.nome} utilizou ${deficit.toStringAsFixed(0)} kWh do Banco de Créditos.',
           'cor': 'orange',
           'icone': 'hourglass_bottom',
         });
@@ -1397,7 +1324,7 @@ class CalculadoraEnergetica {
           'tipo': 'deficit_parcial',
           'titulo': 'Reserva Insuficiente',
           'mensagem':
-              'A reserva só tinha ${saldoMesAnterior.toStringAsFixed(0)} kWh. A diferença de ${faltou.toStringAsFixed(0)} kWh foi cobrada em Reais.',
+              'Reserva insuficiente em ${usina.nome}. Faltaram ${faltou.toStringAsFixed(0)} kWh (cobrados em Reais).',
           'cor': 'red',
           'icone': 'monetization_on',
         });
@@ -1406,7 +1333,7 @@ class CalculadoraEnergetica {
           'tipo': 'deficit_real',
           'titulo': 'Fatura Descoberta (Pagamento Extra)',
           'mensagem':
-              'Faltaram ${deficit.toStringAsFixed(0)} kWh para abater o consumo. A diferença foi cobrada em Reais.',
+              'Sem saldo em ${usina.nome}. Faltaram ${deficit.toStringAsFixed(0)} kWh (cobrados em Reais).',
           'cor': 'red',
           'icone': 'monetization_on',
         });
@@ -1419,70 +1346,44 @@ class CalculadoraEnergetica {
         'tipo': 'concessionaria_fora_aneel',
         'titulo': 'Distribuidora fora da Regra ANEEL',
         'mensagem':
-            'A distribuidora desviou ${divergenciaAneel.toStringAsFixed(0)} kWh do seu direito neste mês. Verifique se a taxa de disponibilidade foi aplicada corretamente.',
+            'A distribuidora reteve indevidamente ${divergenciaAneel.toStringAsFixed(0)} kWh em ${usina.nome}.',
         'cor': 'red',
         'icone': 'gavel',
       });
     }
 
-    double totalTeorico = 0;
-    List<String> nomesDasMaes = [];
-    final boxUsinas = Hive.box<Usina>('usinas');
-    final boxLanc = Hive.box<LancamentoMensal>('lancamentos');
-
-    final maesQueMeEnviam = boxUsinas.values.where(
-      (u) =>
-          u.isGeradora &&
-          !u.isDeletado &&
-          u.beneficiarias.any((b) => b.idUsinaFilha == usina.id),
-    );
-
-    int mesBusca = atual.dataReferencia.month - 1;
-    int anoBusca = atual.dataReferencia.year;
-    if (mesBusca == 0) {
-      mesBusca = 12;
-      anoBusca -= 1;
-    }
-
-    for (var mae in maesQueMeEnviam) {
-      try {
-        var lancMae = boxLanc.values.firstWhere(
-          (l) =>
-              l.usinaId == mae.id &&
-              l.dataReferencia.year == anoBusca &&
-              l.dataReferencia.month == mesBusca &&
-              !l.isDeletado,
+    if (!usina.isGeradora) {
+      double diferencaRepasse = totalTeorico - recebidoTerceiros;
+      if (diferencaRepasse > 1.0) {
+        bool maeTeveErroAneel = origensTeoricas.any(
+          (o) => o['erroOrigem'] != null,
         );
-        double enviado = obterCreditoRepassadoParaFilha(mae, lancMae, usina.id);
-        if (enviado > 0) {
-          totalTeorico += enviado;
-          nomesDasMaes.add(mae.nome);
-        }
-      } catch (_) {}
-    }
+        String textoMaes = origensTeoricas.isNotEmpty
+            ? origensTeoricas.map((e) => e['nome']).join(', ')
+            : 'Usina Mãe';
 
-    double diferencaRepasse = totalTeorico - recebidoTerceiros;
-    if (diferencaRepasse > 1.0) {
-      String textoMaes = nomesDasMaes.isNotEmpty
-          ? nomesDasMaes.join(', ')
-          : 'usina mãe';
-      alertas.add({
-        'tipo': 'fraude_repasse',
-        'titulo': 'Retenção no Repasse (Mãe vs Filha)',
-        'mensagem':
-            'A usina $textoMaes enviou ${totalTeorico.toStringAsFixed(0)} kWh, mas a concessionária creditou apenas ${recebidoTerceiros.toStringAsFixed(0)} kWh na fatura atual. Desvio de ${diferencaRepasse.toStringAsFixed(0)} kWh.',
-        'cor': 'red',
-        'icone': 'compare_arrows',
-      });
+        String tituloAlerta = maeTeveErroAneel
+            ? 'Problema na Origem (Regra ANEEL)'
+            : 'Retenção no Repasse';
+
+        String mensagemAlerta = maeTeveErroAneel
+            ? 'Retenção na origem ($textoMaes). Direito de ${usina.nome}: ${totalTeorico.toStringAsFixed(1)} kWh. Repasse real: ${recebidoTerceiros.toStringAsFixed(1)} kWh. Desvio: ${diferencaRepasse.toStringAsFixed(1)} kWh.'
+            : 'Falha no repasse de $textoMaes para ${usina.nome}. Enviado: ${totalTeorico.toStringAsFixed(1)} kWh. Recebido: ${recebidoTerceiros.toStringAsFixed(1)} kWh. Desvio: ${diferencaRepasse.toStringAsFixed(1)} kWh.';
+
+        alertas.add({
+          'tipo': 'fraude_repasse',
+          'titulo': tituloAlerta,
+          'mensagem': mensagemAlerta,
+          'cor': 'red',
+          'icone': maeTeveErroAneel ? 'gavel' : 'compare_arrows',
+        });
+      }
     }
 
     return alertas;
   }
 }
 
-// ===========================================================================
-// ESTRUTURA INTERNA — fila FIFO de créditos
-// ===========================================================================
 class _LoteCredito {
   final int mesAbsoluto;
   double kwh;
