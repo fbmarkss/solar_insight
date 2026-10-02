@@ -1572,14 +1572,34 @@ class _CadastroUsinaScreenState extends State<CadastroUsinaScreen> {
     );
   }
 
-  Widget _buildDialogTitle(String title, IconData icon) => Row(
-    mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildDialogTitle(String title, IconData icon) => Stack(
+    alignment: Alignment.center,
     children: [
-      Icon(icon, color: Colors.deepOrange),
-      const SizedBox(width: 8),
-      Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+      // O título e o ícone continuam perfeitamente centralizados
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: Colors.deepOrange),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ],
+      ),
+      // O botão "X" fica ancorado no lado direito da linha
+      Positioned(
+        right: 0,
+        child: Builder(
+          builder: (ctx) => IconButton(
+            icon: const Icon(Icons.close, color: Colors.grey),
+            tooltip: 'Fechar',
+            onPressed: () => Navigator.pop(ctx),
+          ),
+        ),
       ),
     ],
   );

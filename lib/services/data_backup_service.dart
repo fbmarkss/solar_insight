@@ -1,5 +1,10 @@
 // Caminho: lib/services/data_backup_service.dart
-// Status: 100% COMPLETO | Universal (Mobile e Web corrigido) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA, CSV com Saldo, Histórico de Rateio e Nova UC.
+// Status: 100% COMPLETO | Universal (Mobile e Web) | Fila, Multi-tenancy, Backup JSON Integral com Campos de IA, CSV com Saldo, Histórico de Rateio e Nova UC.
+// Versão: V3.1
+// - CSV de lançamentos: adicionadas colunas novas no final (Ponta, Fora Ponta, Reservado, TE/TUSD, Iluminação, Multa Reativo, Créditos de Terceiros, Saldo Anterior)
+// - JSON: adicionadas TODAS as chaves que faltavam (saldoAnteriorFatura, creditosRecebidosDeTerceiros e campos IA que não estavam no backup)
+// - Versão do JSON: '1.5' → '1.6'
+// - Leitura TOLERANTE: backups antigos continuam funcionando
 
 import 'dart:convert';
 import 'dart:io';
@@ -52,7 +57,6 @@ class DataBackupService {
     final boxUsinas = Hive.box<Usina>('usinas');
     List<List<dynamic>> rows = [];
 
-    // ✅ NOVO: Adicionado campo "Nova_UC" no final das colunas
     rows.add([
       "ID_UC",
       "Nome",
@@ -93,7 +97,7 @@ class DataBackupService {
         panMarca,
         panPot > 0 ? panPot.toString().replaceAll('.', ',') : "",
         panQtd > 0 ? panQtd : "",
-        u.novaUcConcessionaria ?? "", // ✅ NOVO: Escreve no CSV se existir
+        u.novaUcConcessionaria ?? "",
       ]);
     }
 
@@ -193,7 +197,6 @@ class DataBackupService {
           tenantId: userCtx['empresaId'],
           criadoPor: userCtx['uid'],
           ultimaSincronizacao: agora,
-          // ✅ NOVO: Leitura segura caso a coluna 11 (Nova UC) exista no CSV do usuário
           novaUcConcessionaria:
               row.length >= 12 && row[11].toString().trim().isNotEmpty
               ? row[11].toString().trim()
@@ -217,7 +220,10 @@ class DataBackupService {
     final boxLancamentos = Hive.box<LancamentoMensal>('lancamentos');
 
     List<List<dynamic>> rows = [];
+    // ★ V3.1 — Colunas novas adicionadas NO FINAL (índices 11+)
+    // Mantém compatibilidade com backups antigos (que só tinham até índice 10).
     rows.add([
+      // ── Colunas originais (0-10) ───────────────────────────────────────
       "ID_UC",
       "Nome da Usina",
       "Data Ref",
@@ -229,6 +235,25 @@ class DataBackupService {
       "Demanda",
       "Leitura Inversor",
       "Saldo Acumulado",
+      // ── Colunas NOVAS (11+) ────────────────────────────────────────────
+      "Credito_Recebido_Terceiros", // 11
+      "Saldo_Anterior_Fatura", // 12
+      "Consumo_Ponta", // 13
+      "Consumo_ForaPonta", // 14
+      "Consumo_Reservado", // 15
+      "Injetada_Ponta", // 16
+      "Injetada_ForaPonta", // 17
+      "Injetada_Reservada", // 18
+      "Grupo_Tarifario", // 19
+      "Modalidade_Tarifaria", // 20
+      "Tarifa_TE_Unica", // 21
+      "Tarifa_TUSD_Unica", // 22
+      "Tarifa_TE_Ponta", // 23
+      "Tarifa_TUSD_Ponta", // 24
+      "Tarifa_TE_ForaPonta", // 25
+      "Tarifa_TUSD_ForaPonta", // 26
+      "Custo_Iluminacao_Publica", // 27
+      "Multa_Reativo", // 28
     ]);
 
     final lancamentos = boxLancamentos.values
@@ -243,6 +268,7 @@ class DataBackupService {
       } catch (_) {}
 
       rows.add([
+        // ── Colunas originais ──────────────────────────────────────────
         l.usinaId,
         nomeUsina,
         DateFormat('dd/MM/yyyy').format(l.dataReferencia),
@@ -254,6 +280,25 @@ class DataBackupService {
         l.custoDemandaR.toString().replaceAll('.', ','),
         (l.leituraInversor ?? 0.0).toString().replaceAll('.', ','),
         (l.saldoInformadoNaFatura ?? 0.0).toString().replaceAll('.', ','),
+        // ── Colunas NOVAS (V3.1) ───────────────────────────────────────
+        (l.creditosRecebidosDeTerceiros ?? 0.0).toString().replaceAll('.', ','),
+        (l.saldoAnteriorFatura ?? 0.0).toString().replaceAll('.', ','),
+        (l.consumoPonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.consumoForaPonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.consumoReservado ?? 0.0).toString().replaceAll('.', ','),
+        (l.injetadaPonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.injetadaForaPonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.injetadaReservada ?? 0.0).toString().replaceAll('.', ','),
+        (l.grupoTarifario ?? "").toString(),
+        (l.modalidadeTarifaria ?? "").toString(),
+        (l.tarifaTeUnica ?? 0.0).toString().replaceAll('.', ','),
+        (l.tarifaTusdUnica ?? 0.0).toString().replaceAll('.', ','),
+        (l.tarifaTePonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.tarifaTusdPonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.tarifaTeForaPonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.tarifaTusdForaPonta ?? 0.0).toString().replaceAll('.', ','),
+        (l.custoIluminacaoPublica ?? 0.0).toString().replaceAll('.', ','),
+        (l.multaReativo ?? 0.0).toString().replaceAll('.', ','),
       ]);
     }
 
@@ -320,19 +365,52 @@ class DataBackupService {
         );
 
         if (!jaExiste) {
+          // ★ V3.1 — Leitura TOLERANTE das colunas novas
+          // Backups antigos (com menos colunas) não quebram: usa default 0.0/null
           final novoLanc = LancamentoMensal(
             usinaId: idUc,
             dataReferencia: dataRef,
+            // ── Originais ────────────────────────────────────────────
             geracaoTotalKwh: _parseDouble(row[3]),
             energiaInjetadaKwh: _parseDouble(row[4]),
             energiaConsumidaRedeKwh: _parseDouble(row[5]),
             tarifaKwh: _parseDouble(row[6]),
-            valorFaturaR: _parseDouble(row[7]),
+            valorFaturaR: row.length > 7 ? _parseDouble(row[7]) : 0.0,
             custoDemandaR: row.length > 8 ? _parseDouble(row[8]) : 0.0,
             leituraInversor: row.length > 9 ? _parseDouble(row[9]) : 0.0,
             saldoInformadoNaFatura: row.length > 10
                 ? _parseDouble(row[10])
                 : 0.0,
+            // ── Novas (V3.1) ─────────────────────────────────────────
+            creditosRecebidosDeTerceiros: row.length > 11
+                ? _parseDouble(row[11])
+                : null,
+            saldoAnteriorFatura: row.length > 12 ? _parseDouble(row[12]) : null,
+            consumoPonta: row.length > 13 ? _parseDouble(row[13]) : null,
+            consumoForaPonta: row.length > 14 ? _parseDouble(row[14]) : null,
+            consumoReservado: row.length > 15 ? _parseDouble(row[15]) : null,
+            injetadaPonta: row.length > 16 ? _parseDouble(row[16]) : null,
+            injetadaForaPonta: row.length > 17 ? _parseDouble(row[17]) : null,
+            injetadaReservada: row.length > 18 ? _parseDouble(row[18]) : null,
+            grupoTarifario:
+                row.length > 19 && row[19].toString().trim().isNotEmpty
+                ? row[19].toString().trim()
+                : null,
+            modalidadeTarifaria:
+                row.length > 20 && row[20].toString().trim().isNotEmpty
+                ? row[20].toString().trim()
+                : null,
+            tarifaTeUnica: row.length > 21 ? _parseDouble(row[21]) : null,
+            tarifaTusdUnica: row.length > 22 ? _parseDouble(row[22]) : null,
+            tarifaTePonta: row.length > 23 ? _parseDouble(row[23]) : null,
+            tarifaTusdPonta: row.length > 24 ? _parseDouble(row[24]) : null,
+            tarifaTeForaPonta: row.length > 25 ? _parseDouble(row[25]) : null,
+            tarifaTusdForaPonta: row.length > 26 ? _parseDouble(row[26]) : null,
+            custoIluminacaoPublica: row.length > 27
+                ? _parseDouble(row[27])
+                : null,
+            multaReativo: row.length > 28 ? _parseDouble(row[28]) : null,
+            // ── Metadados ────────────────────────────────────────────
             tenantId: userCtx['empresaId'],
             criadoPor: userCtx['uid'],
             ultimaModificacao: agora,
@@ -348,7 +426,7 @@ class DataBackupService {
   }
 
   // ===========================================================================
-  // --- BACKUP COMPLETO (JSON) INTEGRAL (COM CAMPOS DA IA E HISTÓRICO RATEIO) ---
+  // --- BACKUP COMPLETO (JSON) INTEGRAL ---
   // ===========================================================================
 
   static Future<void> exportarBackupJson(String nomeArquivo) async {
@@ -364,7 +442,6 @@ class DataBackupService {
             'concessionaria': u.concessionaria,
             'tipo': u.tipo,
             'ativa': u.ativa,
-            // ✅ NOVO CAMPO: Guardar no backup JSON
             'novaUcConcessionaria': u.novaUcConcessionaria,
             'inversores': u.inversores
                 .map(
@@ -408,6 +485,7 @@ class DataBackupService {
         )
         .toList();
 
+    // ★ V3.1 — JSON agora exporta TODOS os campos do LancamentoMensal
     final lancamentosMap = boxLancamentos.values
         .where((l) => !l.isDeletado)
         .map(
@@ -422,6 +500,7 @@ class DataBackupService {
             'custoDemandaR': l.custoDemandaR,
             'leituraInversor': l.leituraInversor,
             'observacao': l.observacao,
+            // Campos IA / tarifas
             'grupoTarifario': l.grupoTarifario,
             'modalidadeTarifaria': l.modalidadeTarifaria,
             'tarifaTeUnica': l.tarifaTeUnica,
@@ -433,13 +512,22 @@ class DataBackupService {
             'custoIluminacaoPublica': l.custoIluminacaoPublica,
             'multaReativo': l.multaReativo,
             'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
+            // ★ NOVOS (V3.1) — antes eram perdidos no backup
+            'saldoAnteriorFatura': l.saldoAnteriorFatura,
+            'creditosRecebidosDeTerceiros': l.creditosRecebidosDeTerceiros,
+            // Consumos detalhados (ponta/fora/reservado)
+            'consumoPonta': l.consumoPonta,
+            'consumoForaPonta': l.consumoForaPonta,
+            'consumoReservado': l.consumoReservado,
+            'injetadaPonta': l.injetadaPonta,
+            'injetadaForaPonta': l.injetadaForaPonta,
+            'injetadaReservada': l.injetadaReservada,
           },
         )
         .toList();
 
     final backupData = {
-      'versao':
-          '1.5', // ✅ Versão elevada devido à adição do campo novaUcConcessionaria
+      'versao': '1.6', // ★ V3.1 — subiu de 1.5 para 1.6
       'dataBackup': DateTime.now().toIso8601String(),
       'usinas': usinasMap,
       'lancamentos': lancamentosMap,
@@ -583,7 +671,6 @@ class DataBackupService {
           tenantId: userCtx['empresaId'],
           criadoPor: userCtx['uid'],
           ultimaSincronizacao: agora,
-          // ✅ NOVO: Restaura o campo de forma segura
           novaUcConcessionaria: uMap['novaUcConcessionaria'],
         );
         await boxUsinas.add(nova);
@@ -594,6 +681,7 @@ class DataBackupService {
 
     if (data['lancamentos'] != null) {
       for (var lMap in data['lancamentos']) {
+        // ★ V3.1 — Leitura TOLERANTE: backups antigos (v1.5) não têm as chaves novas
         final novo = LancamentoMensal(
           usinaId: lMap['usinaId'],
           dataReferencia: DateTime.parse(lMap['dataReferencia']),
@@ -603,7 +691,7 @@ class DataBackupService {
               .toDouble(),
           tarifaKwh: (lMap['tarifaKwh'] as num).toDouble(),
           valorFaturaR: (lMap['valorFaturaR'] as num).toDouble(),
-          custoDemandaR: (lMap['custoDemandaR'] as num).toDouble(),
+          custoDemandaR: (lMap['custoDemandaR'] as num?)?.toDouble() ?? 0.0,
           leituraInversor: (lMap['leituraInversor'] as num?)?.toDouble(),
           observacao: lMap['observacao'],
           grupoTarifario: lMap['grupoTarifario'],
@@ -620,6 +708,19 @@ class DataBackupService {
           multaReativo: (lMap['multaReativo'] as num?)?.toDouble(),
           saldoInformadoNaFatura: (lMap['saldoInformadoNaFatura'] as num?)
               ?.toDouble(),
+          // ★ NOVOS (V3.1) — leitura tolerante
+          saldoAnteriorFatura: (lMap['saldoAnteriorFatura'] as num?)
+              ?.toDouble(),
+          creditosRecebidosDeTerceiros:
+              (lMap['creditosRecebidosDeTerceiros'] as num?)?.toDouble(),
+          // Consumos detalhados
+          consumoPonta: (lMap['consumoPonta'] as num?)?.toDouble(),
+          consumoForaPonta: (lMap['consumoForaPonta'] as num?)?.toDouble(),
+          consumoReservado: (lMap['consumoReservado'] as num?)?.toDouble(),
+          injetadaPonta: (lMap['injetadaPonta'] as num?)?.toDouble(),
+          injetadaForaPonta: (lMap['injetadaForaPonta'] as num?)?.toDouble(),
+          injetadaReservada: (lMap['injetadaReservada'] as num?)?.toDouble(),
+          // Metadados
           tenantId: userCtx['empresaId'],
           criadoPor: userCtx['uid'],
           ultimaModificacao: agora,

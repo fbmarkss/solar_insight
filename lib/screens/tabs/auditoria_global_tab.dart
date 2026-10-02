@@ -1,6 +1,11 @@
 // Caminho: lib/screens/tabs/auditoria_global_tab.dart
 // Descrição: Aba de Análise Global com Filtro Dinâmico Inteligente e Gráficos em Onda.
+// Versão: V4.0 — ARQUITETURA DTO
+// - ATUALIZADO: Todos os cálculos matemáticos agora utilizam o motor central 'analisarCiclo'.
+// - GARANTIA: Economias e consumos globais 100% alinhados com o GD II e as telas individuais.
+// - MANTIDO: Todos os gráficos, ranking e layout responsivo.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart' hide TextDirection;
@@ -18,7 +23,6 @@ class AuditoriaGlobalTab extends StatefulWidget {
 }
 
 class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
-  // Padrão alterado para 'ANO' para manter o gráfico limpo e legível
   String _filtroSelecionado = 'ANO';
 
   Future<void> _handleRefresh(BuildContext context) async {
@@ -41,7 +45,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     }
   }
 
-  // Novo Filtro Baseado na Data Mais Recente do Banco de Dados
   bool _isDentroDoFiltro(DateTime dataRef, DateTime dataBase) {
     if (_filtroSelecionado == 'TUDO') return true;
 
@@ -52,7 +55,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     } else if (_filtroSelecionado == '12M') {
       dataLimite = DateTime(dataBase.year, dataBase.month - 11, 1);
     } else {
-      // ANO
       dataLimite = DateTime(dataBase.year, 1, 1);
     }
 
@@ -103,7 +105,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
           );
         }
 
-        // Descobre qual a fatura mais recente lançada para alinhar o filtro
         DateTime dataBaseFiltro = DateTime.now();
         if (todosLancs.isNotEmpty) {
           dataBaseFiltro = todosLancs
@@ -128,14 +129,18 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
             (a, b) => a.dataReferencia.compareTo(b.dataReferencia),
           );
 
-          for (var l in lancsDaUsina) {
-            // Roda o cálculo para manter o histórico de saldo alimentado
-            final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
+          for (int i = 0; i < lancsDaUsina.length; i++) {
+            var l = lancsDaUsina[i];
+            var anterior = (i > 0) ? lancsDaUsina[i - 1] : null;
+
+            // ★ INTEGRAÇÃO COM MOTOR CENTRAL: Pede o "Laudo" (DTO) completo para a calculadora
+            ProcessamentoCiclo ciclo = CalculadoraEnergetica.analisarCiclo(
               usina,
               l,
+              anterior: anterior,
             );
 
-            // Mas só desenha os dados se o mês passar no Filtro
+            // Desenha os dados apenas se o mês passar no Filtro
             if (_isDentroDoFiltro(l.dataReferencia, dataBaseFiltro)) {
               String key = DateFormat('yyyyMM').format(l.dataReferencia);
               String display = DateFormat(
@@ -162,61 +167,20 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
                 },
               );
 
-              // =================================================================
-              // CORREÇÃO 1: TARIFA INTELIGENTE
-              // Identifica se tem Tarifa TE + TUSD da IA, senão usa manual.
-              // =================================================================
-              double tarifaReal = l.tarifaKwh;
-              if (l.grupoTarifario == 'A' ||
-                  l.modalidadeTarifaria == 'VERDE' ||
-                  l.modalidadeTarifaria == 'AZUL') {
-                if ((l.tarifaTeForaPonta ?? 0) > 0) {
-                  tarifaReal =
-                      l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
-                }
-              } else {
-                if ((l.tarifaTeUnica ?? 0) > 0) {
-                  tarifaReal = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
-                }
-              }
-              if (tarifaReal <= 0) {
-                tarifaReal = l.tarifaKwh;
-              }
-
-              // =================================================================
-              // CORREÇÃO 2: DADOS REAIS DO FORMULÁRIO PARA CÁLCULO DE ECONOMIA
-              // =================================================================
-              double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
-                  .clamp(0.0, double.infinity);
-              double creditosTotaisDisponiveis =
-                  l.energiaInjetadaKwh +
-                  (l.creditosRecebidosDeTerceiros ?? 0.0);
-
-              double energiaCompensada = creditosTotaisDisponiveis.clamp(
-                0.0,
-                l.energiaConsumidaRedeKwh,
-              );
-
-              double energiaEfetivamentePoupada =
-                  autoconsumo + energiaCompensada;
-
               if (usina.isGeradora) {
-                totalGeralGerado += resumo.geracaoTotal;
-                dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
+                totalGeralGerado += ciclo.geracaoTotal;
+                dadosMensais[key]!['geracao'] += ciclo.geracaoTotal;
               }
 
-              // Economia agora é calculada usando a tarifa real extraída
-              double economiaFinanceira =
-                  energiaEfetivamentePoupada * tarifaReal;
-              double custoProjetado = l.valorFaturaR + economiaFinanceira;
+              double custoProjetado = l.valorFaturaR + ciclo.economiaTotalReais;
 
-              totalGeralConsumido += resumo.consumoRealLocal;
-              dadosMensais[key]!['consumo'] += resumo.consumoRealLocal;
+              totalGeralConsumido += ciclo.consumoRealLocal;
+              dadosMensais[key]!['consumo'] += ciclo.consumoRealLocal;
               dadosMensais[key]!['custo'] += l.valorFaturaR;
               dadosMensais[key]!['custoProjetado'] += custoProjetado;
 
               consumoPorUsina[usina.nome] =
-                  (consumoPorUsina[usina.nome] ?? 0) + resumo.consumoRealLocal;
+                  (consumoPorUsina[usina.nome] ?? 0) + ciclo.consumoRealLocal;
             }
           }
         }
@@ -387,8 +351,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
   Widget _buildFiltrosRow() {
     return Row(
       children: [
-        // _buildFilterChip('Tudo', 'TUDO'),
-        // const SizedBox(width: 8),
         _buildFilterChip('6 Meses', '6M'),
         const SizedBox(width: 8),
         _buildFilterChip('12 Meses', '12M'),
@@ -419,7 +381,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 1. Termômetro
   Widget _buildTermometroCard(double geracao, double consumo) {
     double percentual = consumo > 0 ? (geracao / consumo) : 0.0;
     Color corGauage = percentual >= 1.0
@@ -471,7 +432,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 2. Ranking de Consumo
   Widget _buildRankingCard(
     List<MapEntry<String, double>> ranking,
     double totalConsumo,
@@ -539,7 +499,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 3. Balanço Energético (Linhas Duplas)
   Widget _buildBalancoLinhasCard(List<Map<String, dynamic>> dados) {
     return _buildBaseCard(
       titulo: "Balanço Energético",
@@ -582,7 +541,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 4. Gráfico de ONDA (Evolução da Geração)
   Widget _buildGeracaoLinhaCard(List<Map<String, dynamic>> dados) {
     return _buildBaseCard(
       titulo: "Evolução da Produção",
@@ -617,7 +575,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 5. Gráfico Financeiro (Custo Evitado - Barras)
   Widget _buildFinanceiroCard(List<Map<String, dynamic>> dados) {
     return _buildBaseCard(
       titulo: "Custo Evitado (Economia)",
@@ -676,7 +633,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // 6. Top Vilões (Design Mais Clean)
   Widget _buildTopViloesCard(
     List<LancamentoMensal> lancamentos,
     Box<Usina> boxUsinas,
@@ -698,7 +654,8 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     }
 
     ordenados.sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
-    DateTime ultimaData = ordenados.last.dataReferencia;
+
+    DateTime ultimaData = ordenados.first.dataReferencia;
 
     var doMes = ordenados
         .where(
@@ -722,7 +679,9 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
             nomeUsina = boxUsinas.values
                 .firstWhere((u) => u.id == l.usinaId)
                 .nome;
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('[V3.2] Usina não encontrada para fatura: $e');
+          }
 
           Color corRank = rank == 1
               ? Colors.red
@@ -784,7 +743,6 @@ class _AuditoriaGlobalTabState extends State<AuditoriaGlobalTab> {
     );
   }
 
-  // --- AUXILIARES DE UI ---
   Widget _buildBaseCard({
     required String titulo,
     required IconData icone,
@@ -1125,7 +1083,6 @@ class _DoubleLineChartPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
 
-// NOVO: Painter em ONDA (Curvas Suaves)
 class _WaveChartPainter extends CustomPainter {
   final List<Map<String, dynamic>> dados;
   final Color cor;

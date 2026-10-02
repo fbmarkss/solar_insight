@@ -1,12 +1,10 @@
 // Caminho: lib/services/sincronizacao_service.dart
 // Status: 100% COMPLETO | Motor Reativo, Tradutor Blindado, Garbage Collector Agressivo.
-//
-// ALTERAÇÕES DESTA VERSÃO:
-//   1. CORREÇÃO DE SINTAXE: Substituição dos ponteiros (&) inválidos em Dart por
-//       callbacks (funções anônimas) na chamada do _buscarPermissoesFirestore.
-//   2. O motor agora lê o plano, role e empresaId diretamente do cache local.
-//   3. Atualização do `lastSync` transformada em "Fire-and-forget" (não bloqueia a thread).
-//   4. NOVO: Inclusão do campo 'novaUcConcessionaria' nos métodos _usinaToMap e _mapToUsina.
+// Versão: V3.1
+// - ADICIONADO: saldoAnteriorFatura e creditosRecebidosDeTerceiros em _lancamentoToMap
+// - ADICIONADO: saldoAnteriorFatura e creditosRecebidosDeTerceiros em _mapToLancamento
+// - ADICIONADO: saldoAnteriorFatura e creditosRecebidosDeTerceiros em _atualizarLancamentoComMap
+// - Campos novos são lidos com tolerância (documentos antigos não quebram)
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -177,7 +175,6 @@ class SincronizacaoService {
         isAdmin = (roleSalva == 'admin' || empresaId == user.uid);
         debugPrint('⚡ [SYNC] Autenticação lida do cache local em 0ms!');
       } else {
-        // ✅ CORREÇÃO: Utilizando callbacks em vez de ponteiros
         await _buscarPermissoesFirestore(
           user,
           (val) => empresaPro = val,
@@ -186,7 +183,6 @@ class SincronizacaoService {
         );
       }
     } else {
-      // ✅ CORREÇÃO: Utilizando callbacks em vez de ponteiros
       await _buscarPermissoesFirestore(
         user,
         (val) => empresaPro = val,
@@ -211,7 +207,6 @@ class SincronizacaoService {
     }
 
     try {
-      // ⚡ OTIMIZAÇÃO: Fire-and-forget. Regista o LastSync no fundo, não bloqueia o fluxo!
       unawaited(
         _firestore.collection('users').doc(user.uid).set({
           'lastSync': FieldValue.serverTimestamp(),
@@ -224,7 +219,7 @@ class SincronizacaoService {
       int lancamentosUp = 0;
       int lancamentosDown = 0;
 
-      // Fluxo Híbrido: se fez upgrade, sobe tudo antes para não esmagar. Senão, fluxo normal.
+      // Fluxo Híbrido: se fez upgrade, sobe tudo antes para não esmagar.
       if (migracaoPosUpgradeAtiva) {
         debugPrint(
           '🚀 [SYNC] MODO MIGRAÇÃO: upload forçado antes do download.',
@@ -312,7 +307,6 @@ class SincronizacaoService {
       );
     } catch (e) {
       debugPrint('⚠️ [SYNC] Falha ao verificar plano no Firestore: $e');
-      // Em caso de falha de rede total, não trava o app, assume grátis por segurança
       setEmpresaPro(false);
     }
   }
@@ -647,7 +641,6 @@ class SincronizacaoService {
             },
           )
           .toList(),
-      // ✅ NOVO CAMPO INCLUÍDO AQUI
       'novaUcConcessionaria': u.novaUcConcessionaria,
     };
   }
@@ -664,7 +657,6 @@ class SincronizacaoService {
       criadoPor: map['criadoPor'],
       isDeletado: map['isDeletado'] ?? false,
       ultimaSincronizacao: _converterParaDateTime(map['ultimaAtualizacao']),
-      // ✅ NOVO CAMPO LIDO AQUI DE FORMA SEGURA
       novaUcConcessionaria: map['novaUcConcessionaria'] as String?,
       inversores: (map['inversores'] as List? ?? [])
           .map(
@@ -717,7 +709,6 @@ class SincronizacaoService {
     u.ativa = m['ativa'] ?? u.ativa;
     u.isDeletado = m['isDeletado'] ?? false;
     u.tipo = m['tipo'] ?? u.tipo;
-    // ✅ NOVO CAMPO ATUALIZADO AQUI
     u.novaUcConcessionaria = m['novaUcConcessionaria'] as String?;
 
     final usinaAtualizada = _mapToUsina(m, u.idRemoto!);
@@ -746,8 +737,10 @@ class SincronizacaoService {
       'editadoPor': l.editadoPor,
       'ultimaAtualizacao': FieldValue.serverTimestamp(),
       'saldoInformadoNaFatura': l.saldoInformadoNaFatura,
+      // ★ V3.1 — Campos que estavam faltando (bug de perda de dado em nuvem)
       'creditosRecebidosDeTerceiros': l.creditosRecebidosDeTerceiros,
       'saldoAnteriorFatura': l.saldoAnteriorFatura,
+      // Campos IA (já existiam)
       'grupoTarifario': l.grupoTarifario,
       'modalidadeTarifaria': l.modalidadeTarifaria,
       'consumoPonta': l.consumoPonta,
@@ -791,9 +784,12 @@ class SincronizacaoService {
       criadoPor: map['criadoPor'],
       saldoInformadoNaFatura: (map['saldoInformadoNaFatura'] as num?)
           ?.toDouble(),
+      // ★ V3.1 — Campos que estavam faltando (bug de perda de dado em nuvem)
+      // Leitura TOLERANTE: documentos antigos sem esses campos retornam null
       creditosRecebidosDeTerceiros:
           (map['creditosRecebidosDeTerceiros'] as num?)?.toDouble(),
       saldoAnteriorFatura: (map['saldoAnteriorFatura'] as num?)?.toDouble(),
+      // Campos IA (já existiam)
       grupoTarifario: map['grupoTarifario'],
       modalidadeTarifaria: map['modalidadeTarifaria'],
       consumoPonta: (map['consumoPonta'] as num?)?.toDouble(),
@@ -828,8 +824,16 @@ class SincronizacaoService {
     l.isDeletado = lNuvem.isDeletado;
     l.ultimaModificacao = lNuvem.ultimaModificacao;
     l.saldoInformadoNaFatura = lNuvem.saldoInformadoNaFatura;
-    l.creditosRecebidosDeTerceiros = lNuvem.creditosRecebidosDeTerceiros;
-    l.saldoAnteriorFatura = lNuvem.saldoAnteriorFatura;
+    // ★ V3.1 — Sincroniza os 2 campos que faltavam
+    // Regra de segurança: só sobrescreve local se a nuvem tiver valor (evita
+    // que um documento antigo, sem o campo, apague o dado local).
+    if (lNuvem.creditosRecebidosDeTerceiros != null) {
+      l.creditosRecebidosDeTerceiros = lNuvem.creditosRecebidosDeTerceiros;
+    }
+    if (lNuvem.saldoAnteriorFatura != null) {
+      l.saldoAnteriorFatura = lNuvem.saldoAnteriorFatura;
+    }
+    // Campos IA
     l.grupoTarifario = lNuvem.grupoTarifario;
     l.modalidadeTarifaria = lNuvem.modalidadeTarifaria;
     l.consumoPonta = lNuvem.consumoPonta;

@@ -1,5 +1,9 @@
 // Caminho: lib/screens/lancamento_mensal_screen.dart
 // Descrição: Tela de Lançamento COMPLETA com UI Mutante (Modo Simples vs Modo IA).
+// Versão: V3.4 — SUPORTE A DUPLA FUNÇÃO (Geradora e Beneficiária)
+// - CORRIGIDO: preenchimento automático de creditosRecebidosDeTerceiros agora
+//   busca a mãe no MÊS ANTERIOR (defasagem correta) independente se a usina
+//   atual é classificada como geradora ou beneficiária.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +14,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../utils/app_feedback.dart';
+import '../utils/calculadora_energetica.dart';
 import '../services/logger_service.dart';
 import '../services/sync_queue_service.dart';
 import 'cadastro_usina_screen.dart';
@@ -450,29 +455,48 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
       _creditosTerceirosController.text,
     );
 
-    if (!_usinaSelecionada!.isGeradora && creditosTerceirosTratado == 0.0) {
+    // ★ V3.4 — Defasagem de leitura (M+1) HÍBRIDA
+    // Agora o sistema verifica o recebimento de créditos INDEPENDENTE se a usina
+    // atual é geradora ou beneficiária, permitindo a "Dupla Função".
+    if (creditosTerceirosTratado == 0.0) {
       final boxUsinas = Hive.box<Usina>('usinas');
+
+      // Busca TODAS as usinas que enviam créditos para a usina atualmente selecionada
       final maes = boxUsinas.values.where(
         (u) =>
             u.isGeradora &&
             u.beneficiarias.any((b) => b.idUsinaFilha == _usinaSelecionada!.id),
       );
 
+      // Calcula o mês anterior ao da filha (defasagem M+1)
+      int mesBuscaMae = _dataReferencia.month - 1;
+      int anoBuscaMae = _dataReferencia.year;
+      if (mesBuscaMae == 0) {
+        mesBuscaMae = 12;
+        anoBuscaMae -= 1;
+      }
+
       for (var mae in maes) {
         try {
-          final vinculo = mae.beneficiarias.firstWhere(
-            (b) => b.idUsinaFilha == _usinaSelecionada!.id,
-          );
+          // Busca a fatura da mãe no MÊS ANTERIOR
           final lancMae = boxLancamentos.values.firstWhere(
             (lm) =>
                 lm.usinaId == mae.id &&
-                lm.dataReferencia.year == _dataReferencia.year &&
-                lm.dataReferencia.month == _dataReferencia.month &&
+                lm.dataReferencia.year == anoBuscaMae &&
+                lm.dataReferencia.month == mesBuscaMae &&
                 !lm.isDeletado,
           );
+
+          // Usa o helper oficial da calculadora para calcular o crédito repassado
           creditosTerceirosTratado +=
-              (lancMae.energiaInjetadaKwh * (vinculo.percentual / 100));
-        } catch (_) {}
+              CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                mae,
+                lancMae,
+                _usinaSelecionada!.id,
+              );
+        } catch (_) {
+          // Mãe sem lançamento no mês anterior → ignora silenciosamente
+        }
       }
     }
 
@@ -492,7 +516,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
 
       l.energiaConsumidaRedeKwh = _converterParaDouble(_consumoController.text);
 
-      // 👇 CORREÇÃO AQUI (Garante que a tarifa base receba a soma da IA)
       l.tarifaKwh = _temDadosAvancados ? (_teUnica + _tusdUnica) : tarifa;
 
       l.valorFaturaR = _converterParaDouble(_valorFaturaController.text);
@@ -545,7 +568,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
         creditosRecebidosDeTerceiros: creditosTerceirosTratado,
         energiaConsumidaRedeKwh: _converterParaDouble(_consumoController.text),
 
-        // 👇 CORREÇÃO AQUI (Garante que a tarifa base receba a soma da IA)
         tarifaKwh: _temDadosAvancados ? (_teUnica + _tusdUnica) : tarifa,
 
         valorFaturaR: _converterParaDouble(_valorFaturaController.text),
@@ -1147,7 +1169,6 @@ class _LancamentoMensalScreenState extends State<LancamentoMensalScreen> {
             ),
             const SizedBox(height: 12),
 
-            // --- LIBERAÇÃO VISUAL: Mostra o campo de Créditos Recebidos para QUALQUER Usina ---
             _buildStylishField(
               controller: _creditosTerceirosController,
               label: isGeradora

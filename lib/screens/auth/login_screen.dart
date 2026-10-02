@@ -289,7 +289,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const Column(
                     children: [
                       Text(
-                        "SolarInsight v1.0.0 Web/Mobile",
+                        "SolarInsight v1.0.26 Web/Mobile",
                         style: TextStyle(color: Colors.grey, fontSize: 13),
                       ),
                       SizedBox(height: 4),

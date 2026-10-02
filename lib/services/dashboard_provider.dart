@@ -1,5 +1,9 @@
 // Caminho: lib/services/dashboard_provider.dart
-// ALTERAÇÃO: Adicionado método reset() para limpeza total no logout.
+// Descrição: Provider de estado do Dashboard. Agrega métricas de todas as usinas.
+// Versão: V4.0 — INTEGRAÇÃO COM MOTOR CENTRAL (DTO ProcessamentoCiclo)
+// - ATUALIZADO: Agora utiliza o ProcessamentoCiclo para obter dados do mês e alertas.
+// - ATUALIZADO: Remoção do loop duplo (refsParaAlertas). Tudo resolvido em 1 passo.
+// - MANTIDO: Todos os getters e estruturas públicas (não quebra a tela).
 
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -53,7 +57,6 @@ class DashboardProvider extends ChangeNotifier {
   // ===========================================================================
   // RESET (para uso no logout — limpa tudo sem depender do Hive)
   // ===========================================================================
-  /// Zera todos os campos e notifica. Chamado pelo SessionManager no logout.
   void reset() {
     totalGerado = 0;
     totalEconomizado = 0;
@@ -73,7 +76,6 @@ class DashboardProvider extends ChangeNotifier {
     nomeMesReferencia = "---";
 
     alertasDoSistema = [];
-
     _listaUsinas = [];
     _usinaSelecionada = null;
 
@@ -81,7 +83,6 @@ class DashboardProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Método para disparar a sincronização manual e atualizar a interface
   Future<String> sincronizarDados() async {
     _isLoading = true;
     notifyListeners();
@@ -111,7 +112,6 @@ class DashboardProvider extends ChangeNotifier {
   Future<void> _carregarDados() async {
     _isLoading = true;
 
-    // ⚠️ PROTEÇÃO: se as boxes não estão abertas, aborta silenciosamente
     if (!Hive.isBoxOpen('usinas') || !Hive.isBoxOpen('lancamentos')) {
       _isLoading = false;
       notifyListeners();
@@ -150,7 +150,9 @@ class DashboardProvider extends ChangeNotifier {
 
     int contUsinas = 0;
     DateTime? dataMaisRecente;
-    List<Map<String, dynamic>> listaAlertasTemp = [];
+
+    // Lista unificada para guardar todos os alertas encontrados no mês atual
+    List<Map<String, dynamic>> alertasFinais = [];
 
     for (var usina in usinasParaCalcular) {
       contUsinas++;
@@ -171,6 +173,7 @@ class DashboardProvider extends ChangeNotifier {
         }
       }
 
+      // Calcula as métricas vitais da usina (já usando a matemática GD II por baixo dos panos)
       final metricas = CalculadoraEnergetica.calcularMetricasGerais(
         usina,
         lancamentosUsina,
@@ -226,45 +229,49 @@ class DashboardProvider extends ChangeNotifier {
       ).format(dataMaisRecente).toUpperCase();
 
       for (var usina in usinasParaCalcular) {
-        var lancamentoMes = boxLancamentos.values.firstWhere(
-          (l) =>
-              l.usinaId == usina.id &&
-              !l.isDeletado &&
-              l.dataReferencia.year == dataMaisRecente!.year &&
-              l.dataReferencia.month == dataMaisRecente.month,
-          orElse: () => LancamentoMensal(
-            usinaId: usina.id,
-            dataReferencia: dataMaisRecente!,
-            geracaoTotalKwh: 0,
-            energiaInjetadaKwh: 0,
-            energiaConsumidaRedeKwh: 0,
-            tarifaKwh: 0,
-            valorFaturaR: 0,
-          ),
-        );
+        final lancamentosUsina =
+            boxLancamentos.values
+                .where((l) => l.usinaId == usina.id && !l.isDeletado)
+                .toList()
+              ..sort((a, b) => b.dataReferencia.compareTo(a.dataReferencia));
 
-        if (lancamentoMes.usinaId.isNotEmpty) {
-          final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
+        LancamentoMensal? lancamentoMes;
+        try {
+          lancamentoMes = lancamentosUsina.firstWhere(
+            (l) =>
+                l.dataReferencia.year == dataMaisRecente!.year &&
+                l.dataReferencia.month == dataMaisRecente.month,
+          );
+        } catch (_) {}
+
+        if (lancamentoMes != null) {
+          // Busca o lançamento do mês anterior para cálculo preciso de desvios no motor
+          LancamentoMensal? anterior;
+          int idx = lancamentosUsina.indexOf(lancamentoMes);
+          if (idx >= 0 && idx + 1 < lancamentosUsina.length) {
+            anterior = lancamentosUsina[idx + 1];
+          }
+
+          // ★ INTEGRAÇÃO COM MOTOR CENTRAL:
+          // Pede o "Laudo" (DTO) completo para a calculadora
+          final ciclo = CalculadoraEnergetica.analisarCiclo(
             usina,
             lancamentoMes,
+            anterior: anterior,
           );
 
           if (_usinaSelecionada == null) {
-            somaGeracaoMes += resumo.geracaoTotal;
-            somaConsumoMes += resumo.consumoRealLocal;
+            somaGeracaoMes += ciclo.geracaoTotal;
+            somaConsumoMes += ciclo.consumoRealLocal;
           } else {
             somaGeracaoMes += usina.isGeradora
-                ? resumo.geracaoTotal
-                : resumo.injetadoOuRecebido;
-            somaConsumoMes += resumo.consumoRealLocal;
+                ? ciclo.geracaoTotal
+                : ciclo.totalCreditosDisponiveisNoMes;
+            somaConsumoMes += ciclo.consumoRealLocal;
           }
 
-          var novosAlertas = CalculadoraEnergetica.gerarAlertasDeGestao(
-            usina,
-            lancamentoMes,
-            somaSaldo,
-          );
-          listaAlertasTemp.addAll(novosAlertas);
+          // ★ COLETA DE ALERTAS DIRETA DO DTO (Sem loops adicionais!)
+          alertasFinais.addAll(ciclo.alertas);
         }
       }
     }
@@ -278,7 +285,8 @@ class DashboardProvider extends ChangeNotifier {
     geracaoMensal = somaGeracaoMes;
     consumoMensalReal = somaConsumoMes;
     nomeMesReferencia = nomeMes;
-    alertasDoSistema = listaAlertasTemp;
+
+    alertasDoSistema = alertasFinais;
 
     _investimentoConsideradoROI = tempInvestimentoROI;
     _economiaConsideradaROI = tempEconomiaROI;

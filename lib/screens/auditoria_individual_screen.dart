@@ -1,13 +1,10 @@
 // Caminho: lib/screens/auditoria_individual_screen.dart
-// Descrição: Tela de Auditoria Anual com uso de Dados Reais da Calculadora, Gráficos de Balanço e Custo Evitado.
-//
-// ALTERAÇÕES DESTA VERSÃO:
-//   1. Correção do Bug de Duplicação e Soma Dupla: As beneficiárias agora são agrupadas
-//      pelo ID único na hora de gerar o relatório consolidado, evitando que regras
-//      de rateio antigas (histórico de vigência) multipliquem os resultados.
-//   2. Remoção da exibição da percentagem fixa no card consolidado para não enganar o usuário.
-//   3. Título atualizado para "(Consolidado, Taxas Variáveis)" e adição de Tooltip explicativo.
+// Descrição: Tela de Auditoria Anual unificada ao Motor Central (DTO ProcessamentoCiclo).
+// Versão: V4.0
+// - ATUALIZADO: Agregação e cálculos mensais baseados em CalculadoraEnergetica.analisarCiclo.
+// - MANTIDO: Gráficos de balanço, custo evitado, fluxo de créditos e exportação de PDF.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart' hide TextDirection;
@@ -96,7 +93,17 @@ class AuditoriaIndividualScreen extends StatelessWidget {
 
           Map<String, Map<String, dynamic>> dadosMensais = {};
 
-          for (var l in lancamentos) {
+          for (int i = 0; i < lancamentos.length; i++) {
+            var l = lancamentos[i];
+            var anterior = (i > 0) ? lancamentos[i - 1] : null;
+
+            // ★ INTEGRAÇÃO COM O MOTOR CENTRAL (DTO)
+            ProcessamentoCiclo ciclo = CalculadoraEnergetica.analisarCiclo(
+              usina,
+              l,
+              anterior: anterior,
+            );
+
             String key = DateFormat('yyyyMM').format(l.dataReferencia);
             String display = DateFormat(
               'MMM',
@@ -122,48 +129,13 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               },
             );
 
-            final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
-              usina,
-              l,
-            );
-
-            double tarifaReal = l.tarifaKwh;
-            if (l.grupoTarifario == 'A' ||
-                l.modalidadeTarifaria == 'VERDE' ||
-                l.modalidadeTarifaria == 'AZUL') {
-              if ((l.tarifaTeForaPonta ?? 0) > 0) {
-                tarifaReal =
-                    l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
-              }
-            } else {
-              if ((l.tarifaTeUnica ?? 0) > 0) {
-                tarifaReal = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
-              }
-            }
-            if (tarifaReal <= 0) {
-              tarifaReal = l.tarifaKwh;
-            }
-
-            double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh)
-                .clamp(0.0, double.infinity);
-            double creditosTotaisDisponiveis =
-                l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
-
-            double energiaCompensada = creditosTotaisDisponiveis.clamp(
-              0.0,
-              l.energiaConsumidaRedeKwh,
-            );
-
-            double energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
+            double custoProjetado = l.valorFaturaR + ciclo.economiaTotalReais;
 
             if (usina.isGeradora) {
-              dadosMensais[key]!['geracao'] += resumo.geracaoTotal;
+              dadosMensais[key]!['geracao'] += ciclo.geracaoTotal;
             }
 
-            double economiaFinanceira = energiaEfetivamentePoupada * tarifaReal;
-            double custoProjetado = l.valorFaturaR + economiaFinanceira;
-
-            dadosMensais[key]!['consumo'] += resumo.consumoRealLocal;
+            dadosMensais[key]!['consumo'] += ciclo.consumoRealLocal;
             dadosMensais[key]!['custo'] += l.valorFaturaR;
             dadosMensais[key]!['custoProjetado'] += custoProjetado;
           }
@@ -295,9 +267,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     );
   }
 
-  // ===========================================================================
-  // SEÇÃO REESCRITA: FLUXO DE CRÉDITOS (COM AGRUPAMENTO E TEXTOS CONSOLIDADOS)
-  // ===========================================================================
   Widget _buildFluxoCreditosSection(
     List<LancamentoMensal> lancamentosAuditados,
   ) {
@@ -307,45 +276,70 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     List<Widget> tiles = [];
 
     if (usina.isGeradora) {
-      // ✅ 1. AGRUPAMENTO: Extrai apenas os IDs Únicos para não duplicar lojas com várias regras
       Set<String> filhasIdsUnicas = usina.beneficiarias
           .map((b) => b.idUsinaFilha)
           .toSet();
 
       for (String idFilha in filhasIdsUnicas) {
-        double totalReal = 0;
+        double totalRealRecebido = 0;
+        double totalTeoricoCalculado = 0;
 
-        // Pega o nome da primeira ocorrência para usar na tela
         String nomeFilha = usina.beneficiarias
             .firstWhere((b) => b.idUsinaFilha == idFilha)
             .nome;
 
-        final lancsDaFilha = boxLancamentos.values
-            .where((l) => l.usinaId == idFilha && !l.isDeletado)
-            .toList();
-
         for (var lGeradora in lancamentosAuditados) {
           try {
-            final faturaDaFilhaNoMesmoMes = lancsDaFilha.firstWhere(
+            final faturaFilhaMesmoMes = boxLancamentos.values.firstWhere(
               (lf) =>
+                  lf.usinaId == idFilha &&
+                  !lf.isDeletado &&
                   lf.dataReferencia.year == lGeradora.dataReferencia.year &&
                   lf.dataReferencia.month == lGeradora.dataReferencia.month,
             );
-            totalReal += faturaDaFilhaNoMesmoMes.energiaInjetadaKwh;
-          } catch (_) {}
+
+            if ((faturaFilhaMesmoMes.creditosRecebidosDeTerceiros ?? 0) > 0) {
+              totalRealRecebido +=
+                  faturaFilhaMesmoMes.creditosRecebidosDeTerceiros!;
+            } else if (faturaFilhaMesmoMes.energiaInjetadaKwh > 0) {
+              totalRealRecebido += faturaFilhaMesmoMes.energiaInjetadaKwh;
+            }
+          } catch (e) {
+            debugPrint('[V3.2] Sem fatura da filha no mesmo mês: $e');
+          }
+
+          totalTeoricoCalculado +=
+              CalculadoraEnergetica.obterCreditoRepassadoParaFilha(
+                usina,
+                lGeradora,
+                idFilha,
+              );
         }
 
-        tiles.add(_buildFluxoTile(nomeFilha, totalReal, Colors.orange, numero));
+        bool exibindoTerico = totalRealRecebido <= 0;
+
+        tiles.add(
+          _buildFluxoTile(
+            nomeFilha,
+            exibindoTerico ? totalTeoricoCalculado : totalRealRecebido,
+            Colors.orange,
+            numero,
+            isTeorico: exibindoTerico,
+          ),
+        );
       }
     } else {
       double totalTeoricoGlobal = 0;
       double totalRealGlobal = 0;
+      bool temDadoReal = false;
 
       for (var lFilha in lancamentosAuditados) {
-        totalRealGlobal += lFilha.energiaInjetadaKwh;
+        if ((lFilha.creditosRecebidosDeTerceiros ?? 0) > 0) {
+          totalRealGlobal += lFilha.creditosRecebidosDeTerceiros!;
+          temDadoReal = true;
+        }
       }
 
-      // Procura todas as mães desta beneficiária
       final maes = boxUsinas.values.where(
         (u) =>
             u.isGeradora &&
@@ -374,7 +368,9 @@ class AuditoriaIndividualScreen extends StatelessWidget {
                   faturaDaMaeNoMesmoMes,
                   usina.id,
                 );
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('[V3.2] Mãe sem fatura no mês: $e');
+          }
         }
 
         totalTeoricoGlobal += totalTeoricoDestaMae;
@@ -390,7 +386,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
         );
       }
 
-      if ((totalTeoricoGlobal - totalRealGlobal) > 1.0) {
+      if (temDadoReal && (totalTeoricoGlobal - totalRealGlobal) > 1.0) {
         tiles.add(
           Container(
             margin: const EdgeInsets.only(top: 12),
@@ -454,7 +450,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 20),
-        // ✅ 3. TÍTULO ATUALIZADO COMO SOLICITADO
         Text(
           usina.isGeradora
               ? "Destino dos Créditos (Consolidado, Taxas Variáveis)"
@@ -471,7 +466,6 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     );
   }
 
-  // ✅ 2. WIDGET TILE REESCRITO (Remoção da percentagem e adição de Tooltip)
   Widget _buildFluxoTile(
     String nome,
     double valor,
@@ -492,7 +486,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
           Row(
             children: [
               Text(
-                nome, // Sem a percentagem!
+                nome,
                 style: const TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
@@ -501,7 +495,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               const SizedBox(width: 6),
               Tooltip(
                 message: isTeorico
-                    ? 'Valor calculado. As taxas de rateio variaram durante o ano.'
+                    ? 'Valor teórico calculado (dado real de recebimento não preenchido). As taxas de rateio variaram durante o ano.'
                     : 'Valor consolidado. As taxas de rateio variaram durante o ano.',
                 triggerMode: TooltipTriggerMode.tap,
                 child: Icon(
@@ -529,7 +523,8 @@ class AuditoriaIndividualScreen extends StatelessWidget {
     final numero = NumberFormat.decimalPattern('pt_BR');
     final moeda = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
 
-    final resumo = CalculadoraEnergetica.gerarResumoMesOficial(usina, l);
+    // Usa o motor central para pegar o laudo unificado do mês
+    ProcessamentoCiclo ciclo = CalculadoraEnergetica.analisarCiclo(usina, l);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -571,18 +566,18 @@ class AuditoriaIndividualScreen extends StatelessWidget {
               children: [
                 _buildMiniStat(
                   usina.isGeradora ? "Geração Total" : "Consumo Total",
-                  "${numero.format(usina.isGeradora ? resumo.geracaoTotal : resumo.consumoRealLocal)} kWh",
+                  "${numero.format(usina.isGeradora ? ciclo.geracaoTotal : ciclo.consumoRealLocal)} kWh",
                 ),
                 const Icon(Icons.remove, size: 14, color: Colors.grey),
                 _buildMiniStat(
                   usina.isGeradora ? "Consumo Local" : "Crédito Usado",
-                  "${numero.format(usina.isGeradora ? resumo.consumoRealLocal : (resumo.injetadoOuRecebido > resumo.consumoRealLocal ? resumo.consumoRealLocal : resumo.injetadoOuRecebido))} kWh",
+                  "${numero.format(usina.isGeradora ? ciclo.consumoRealLocal : (ciclo.totalCreditosDisponiveisNoMes > ciclo.consumoRealLocal ? ciclo.consumoRealLocal : ciclo.totalCreditosDisponiveisNoMes))} kWh",
                 ),
                 const Icon(Icons.drag_handle, size: 14, color: Colors.grey),
                 _buildMiniStat(
                   usina.isGeradora ? "Exportado" : "Sobrou/Faltou",
-                  "${numero.format(usina.isGeradora ? resumo.injetadoOuRecebido : resumo.sobraFisicaDoMes)} kWh",
-                  color: (usina.isGeradora || resumo.sobraFisicaDoMes >= 0)
+                  "${numero.format(usina.isGeradora ? ciclo.injetadoNaRede : ciclo.sobraFisicaDoMes)} kWh",
+                  color: (usina.isGeradora || ciclo.sobraFisicaDoMes >= 0)
                       ? Colors.green
                       : Colors.red,
                 ),
@@ -605,7 +600,7 @@ class AuditoriaIndividualScreen extends StatelessWidget {
                       style: TextStyle(fontSize: 11, color: Colors.blueGrey),
                     ),
                     Text(
-                      "${numero.format(resumo.injetadoOuRecebido)} kWh",
+                      "${numero.format(ciclo.totalCreditosDisponiveisNoMes)} kWh",
                       style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
@@ -950,6 +945,8 @@ class _DoubleLineChartPainter extends CustomPainter {
 
     for (int i = 0; i < dados.length; i++) {
       double x = marginX + (i * stepX);
+      if (dados.length == 1) x = size.width / 2;
+
       double dyG =
           paddingTop +
           chartHeight -
@@ -1061,23 +1058,30 @@ class _DoubleLineChartPainter extends CustomPainter {
     final path = Path();
     final fillPath = Path();
 
-    for (int i = 0; i < points.length; i++) {
-      if (i == 0) {
-        path.moveTo(points[i].dx, points[i].dy);
-        fillPath.moveTo(points[i].dx, chartBottomY);
-        fillPath.lineTo(points[i].dx, points[i].dy);
-      } else {
-        path.lineTo(points[i].dx, points[i].dy);
-        fillPath.lineTo(points[i].dx, points[i].dy);
+    if (points.length == 1) {
+      path.moveTo(20, points[0].dy);
+      path.lineTo(size.width - 20, points[0].dy);
+    } else {
+      path.moveTo(points[0].dx, points[0].dy);
+      fillPath.moveTo(points[0].dx, chartBottomY);
+      fillPath.lineTo(points[0].dx, points[0].dy);
+
+      for (int i = 0; i < points.length; i++) {
+        if (i == 0) {
+          path.moveTo(points[i].dx, points[i].dy);
+        } else {
+          path.lineTo(points[i].dx, points[i].dy);
+          fillPath.lineTo(points[i].dx, points[i].dy);
+        }
       }
+      fillPath.lineTo(points.last.dx, chartBottomY);
+      fillPath.close();
     }
-    fillPath.lineTo(points.last.dx, chartBottomY);
-    fillPath.close();
 
     final gradient = LinearGradient(
       begin: Alignment.topCenter,
       end: Alignment.bottomCenter,
-      colors: [color.withValues(alpha: 0.15), color.withValues(alpha: 0.0)],
+      colors: [color.withValues(alpha: 0.1), color.withValues(alpha: 0.0)],
     );
     final paintFill = Paint()
       ..shader = gradient.createShader(

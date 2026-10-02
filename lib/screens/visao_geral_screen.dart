@@ -1,5 +1,6 @@
 // Caminho: lib/screens/visao_geral_screen.dart
-// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real (IBGE Autocomplete, Cache, Previsão Estendida), Gráfico e Alertas.
+// Descrição: Dashboard Híbrido com Navegador Aninhado, Clima Real, Gráfico e Alertas.
+// Versão: V4.0 — ALINHADO AO MOTOR DTO (Preparado para os cálculos GD II).
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -10,7 +11,6 @@ import '../services/dashboard_provider.dart';
 import '../models/usina.dart';
 import '../models/lancamento.dart';
 import '../services/sincronizacao_service.dart';
-// 🚀 IMPORTAMOS O NOSSO NOVO SERVIÇO DE CLIMA
 import '../services/clima_service.dart';
 import '../utils/app_feedback.dart';
 import '../utils/calculadora_energetica.dart';
@@ -27,10 +27,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
   final moedaFormat = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
   final numeroFormat = NumberFormat.decimalPattern('pt_BR');
 
-  // Navegador independente que não esconde o Menu Lateral na Web
   final GlobalKey<NavigatorState> _nestedNavKey = GlobalKey<NavigatorState>();
 
-  // Estado inicial do Clima na Tela
   Map<String, dynamic> _climaData = {
     'condicao': 'Carregando...',
     'temperatura': '--',
@@ -52,31 +50,25 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     _buscarClimaReal();
   }
 
-  // =======================================================================
-  // 🚀 INTEGRAÇÃO SIMPLIFICADA COM O NOVO SERVIÇO DE CLIMA
-  // =======================================================================
   Future<void> _buscarClimaReal({String? cidade}) async {
     if (!mounted) return;
 
-    // Mostra indicador visual de carregamento
     setState(() {
       _climaData['condicao'] = 'Buscando...';
       _climaData['temperatura'] = '--';
     });
 
-    // Chama o serviço isolado que resolve tudo (Cache, Anti-Spam e API)
     final resultado = await ClimaService().buscarClimaReal(
       cidadeManual: cidade,
     );
 
     if (mounted) {
       setState(() {
-        _climaData = resultado; // Atualiza a tela com o mapa pronto
+        _climaData = resultado;
       });
     }
   }
 
-  // --- BOTTOM SHEET MODERNO COM AUTOCOMPLETE IBGE ---
   void _mostrarBottomSheetSelecionarCidade() {
     final box = Hive.box('sync_metadata');
     String cidadeAtual = box.get('cidade_clima') ?? '';
@@ -136,11 +128,9 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // --- AUTOCOMPLETE IBGE USANDO O SERVIÇO ---
                 Autocomplete<String>(
                   initialValue: TextEditingValue(text: cidadeAtual),
                   optionsBuilder: (TextEditingValue textEditingValue) async {
-                    // 🚀 O Serviço de Clima agora cuida da pesquisa do IBGE
                     return await ClimaService().getSugestoesIBGE(
                       textEditingValue.text,
                     );
@@ -294,7 +284,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // --- LÓGICA DE PULL-TO-REFRESH ---
   Future<void> _handleRefresh() async {
     Provider.of<DashboardProvider>(context, listen: false).atualizar();
     _buscarClimaReal();
@@ -511,9 +500,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // =====================================================================
-  // LAYOUT WEB RESPONSIVO (Nova Ordem na Coluna da Direita)
-  // =====================================================================
   Widget _buildWebLayout(
     DashboardProvider dash,
     Widget filtro,
@@ -681,9 +667,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // =====================================================================
-  // LAYOUT MOBILE (Ordem mantida)
-  // =====================================================================
   Widget _buildMobileLayout(
     DashboardProvider dash,
     Widget filtro,
@@ -773,10 +756,6 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     );
   }
 
-  // ===========================================================================
-  // WIDGETS DE ALERTAS, CLIMA E AMBIENTAL
-  // ===========================================================================
-
   Widget _buildClimaCard() {
     return Container(
       padding: const EdgeInsets.all(20),
@@ -823,7 +802,7 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
                         ),
                       ),
                       SizedBox(
-                        width: 120, // Previne quebra de layout
+                        width: 120,
                         child: Text(
                           _climaData['cidade'] ?? 'Detectando...',
                           style: TextStyle(
@@ -1063,7 +1042,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
     } else if (alerta['cor'] == 'red' ||
         alerta['tipo'] == 'creditos_desviados' ||
         alerta['tipo'] == 'deficit_real' ||
-        alerta['tipo'] == 'fraude_repasse') {
+        alerta['tipo'] == 'fraude_repasse' ||
+        alerta['tipo'] == 'concessionaria_fora_aneel') {
       cor = Colors.red.shade600;
       corFundoIcone = Colors.red.shade50;
     } else {
@@ -1143,6 +1123,8 @@ class _VisaoGeralScreenState extends State<VisaoGeralScreen> {
         return Icons.policy_outlined;
       case 'fraude_repasse':
         return Icons.compare_arrows_rounded;
+      case 'concessionaria_fora_aneel':
+        return Icons.gavel_rounded;
       case 'otimizacao_rateio':
         return Icons.lightbulb_outline_rounded;
       case 'fuga_dinheiro':
@@ -2127,7 +2109,6 @@ class _WaveChartPainter extends CustomPainter {
     }
     if (maxVal == 0) maxVal = 1;
 
-    // Área do gráfico
     double paddingTop = 40.0;
     double paddingBottom = 30.0;
     double chartHeight = size.height - paddingTop - paddingBottom;
@@ -2140,7 +2121,6 @@ class _WaveChartPainter extends CustomPainter {
 
     List<Offset> points = [];
 
-    // Calcula os pontos X,Y
     for (int i = 0; i < dados.length; i++) {
       double x = marginX + (i * stepX);
       if (dados.length == 1) x = size.width / 2;

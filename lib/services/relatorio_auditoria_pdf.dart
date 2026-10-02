@@ -1,4 +1,10 @@
 // Caminho: lib/services/relatorio_auditoria_pdf.dart
+// Descrição: Relatório PDF de Auditoria com gráficos e tabela detalhada (Alinhado à Arquitetura DTO).
+// Versão: V4.0
+// - ATUALIZADO: Processamento de dados do gráfico e da tabela via CalculadoraEnergetica.analisarCiclo.
+// - GARANTIA: Economia e balanço energético impressos idênticos aos exibidos nas telas do app.
+
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
@@ -48,11 +54,21 @@ class RelatorioAuditoriaPdf {
     }
 
     // ===================================================================
-    // PROCESSAMENTO DE DADOS PARA O GRÁFICO PDF (Até 12 Meses)
+    // PROCESSAMENTO DE DADOS PARA O GRÁFICO PDF (Até 12 Meses) — VIA DTO
     // ===================================================================
     Map<String, Map<String, dynamic>> dadosMensais = {};
 
-    for (var l in lancsOrdenados) {
+    for (int i = 0; i < lancsOrdenados.length; i++) {
+      var l = lancsOrdenados[i];
+      var anterior = (i > 0) ? lancsOrdenados[i - 1] : null;
+
+      // Pede o laudo centralizado ao motor
+      ProcessamentoCiclo ciclo = CalculadoraEnergetica.analisarCiclo(
+        usina,
+        l,
+        anterior: anterior,
+      );
+
       String key = DateFormat('yyyyMM').format(l.dataReferencia);
       String display = DateFormat(
         'MMM/yy',
@@ -69,39 +85,7 @@ class RelatorioAuditoriaPdf {
         },
       );
 
-      // --- TARIFA INTELIGENTE ---
-      double tarifaReal = l.tarifaKwh;
-      if (l.grupoTarifario == 'A' ||
-          l.modalidadeTarifaria == 'VERDE' ||
-          l.modalidadeTarifaria == 'AZUL') {
-        if ((l.tarifaTeForaPonta ?? 0) > 0) {
-          tarifaReal = l.tarifaTeForaPonta! + (l.tarifaTusdForaPonta ?? 0);
-        }
-      } else {
-        if ((l.tarifaTeUnica ?? 0) > 0) {
-          tarifaReal = l.tarifaTeUnica! + (l.tarifaTusdUnica ?? 0);
-        }
-      }
-      if (tarifaReal <= 0) {
-        tarifaReal = l.tarifaKwh;
-      }
-
-      double autoconsumo = (l.geracaoTotalKwh - l.energiaInjetadaKwh).clamp(
-        0.0,
-        double.infinity,
-      );
-      double creditosTotaisDisponiveis =
-          l.energiaInjetadaKwh + (l.creditosRecebidosDeTerceiros ?? 0.0);
-
-      double energiaCompensada = creditosTotaisDisponiveis.clamp(
-        0.0,
-        l.energiaConsumidaRedeKwh,
-      );
-
-      double energiaEfetivamentePoupada = autoconsumo + energiaCompensada;
-
-      double economiaFinanceira = energiaEfetivamentePoupada * tarifaReal;
-      double custoProjetado = l.valorFaturaR + economiaFinanceira;
+      double custoProjetado = l.valorFaturaR + ciclo.economiaTotalReais;
 
       dadosMensais[key]!['custo'] =
           (dadosMensais[key]!['custo'] as double) + l.valorFaturaR;
@@ -123,7 +107,7 @@ class RelatorioAuditoriaPdf {
     }
     if (maxValGrafico == 0) maxValGrafico = 1;
 
-    // ✅ Lógica da Nova UC para o cabeçalho do PDF
+    // Lógica da Nova UC para o cabeçalho do PDF
     bool temNovaUc =
         usina.novaUcConcessionaria != null &&
         usina.novaUcConcessionaria!.trim().isNotEmpty;
@@ -153,7 +137,7 @@ class RelatorioAuditoriaPdf {
                         style: pw.TextStyle(
                           fontSize: 22,
                           fontWeight: pw.FontWeight.bold,
-                          color: PdfColor.fromHex('#FF5722'), // DeepOrange
+                          color: PdfColor.fromHex('#FF5722'),
                         ),
                       ),
                     ],
@@ -166,7 +150,7 @@ class RelatorioAuditoriaPdf {
                         style: pw.TextStyle(
                           fontSize: 14,
                           fontWeight: pw.FontWeight.bold,
-                          color: PdfColor.fromHex('#455A64'), // BlueGrey800
+                          color: PdfColor.fromHex('#455A64'),
                         ),
                       ),
                       pw.Text(
@@ -214,7 +198,6 @@ class RelatorioAuditoriaPdf {
                         'Unidade: ${usina.nome}',
                         style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                       ),
-                      // ✅ Exibindo a UC Inteligente no PDF
                       pw.Text('Código UC: $textoUcDisplay'),
                     ],
                   ),
@@ -358,14 +341,12 @@ class RelatorioAuditoriaPdf {
                           double hFrente =
                               (d['custo'] / maxValGrafico) * alturaMax;
 
-                          // Impede que barras minúsculas sumam
                           if (hFundo < 2 && d['custoProjetado'] > 0) hFundo = 2;
                           if (hFrente < 2 && d['custo'] > 0) hFrente = 2;
 
                           return pw.Column(
                             mainAxisAlignment: pw.MainAxisAlignment.end,
                             children: [
-                              // Valor do Fundo (Projetado) se for muito maior
                               if (d['custoProjetado'] > (d['custo'] + 10))
                                 pw.Text(
                                   NumberFormat.compact().format(
@@ -376,7 +357,6 @@ class RelatorioAuditoriaPdf {
                                     color: PdfColors.grey500,
                                   ),
                                 ),
-                              // Valor Real
                               pw.Text(
                                 NumberFormat.compact().format(d['custo']),
                                 style: pw.TextStyle(
@@ -386,7 +366,6 @@ class RelatorioAuditoriaPdf {
                                 ),
                               ),
                               pw.SizedBox(height: 2),
-                              // As duas barras sobrepostas
                               pw.SizedBox(
                                 width: 16,
                                 height: hFundo,
@@ -453,17 +432,23 @@ class RelatorioAuditoriaPdf {
               cellAlignment: pw.Alignment.center,
               oddRowDecoration: const pw.BoxDecoration(color: PdfColors.grey50),
               data: lancsOrdenados.reversed.map((l) {
-                final resumo = CalculadoraEnergetica.gerarResumoMesOficial(
-                  usina,
-                  l,
-                );
                 final idx = lancsOrdenados.indexOf(l);
                 final anterior = idx > 0 ? lancsOrdenados[idx - 1] : null;
+
+                // Pega os dados centralizados do motor DTO
+                ProcessamentoCiclo ciclo = CalculadoraEnergetica.analisarCiclo(
+                  usina,
+                  l,
+                  anterior: anterior,
+                );
+
                 final desvio = CalculadoraEnergetica.calcularDesvioDoMes(
                   usina,
                   l,
                   anterior,
                 );
+                final divergenciaAneel =
+                    CalculadoraEnergetica.auditarAneelContraFatura(usina, l);
 
                 double energiaTotal = l.geracaoTotalKwh;
                 if (energiaTotal == 0 && l.energiaInjetadaKwh > 0) {
@@ -471,15 +456,23 @@ class RelatorioAuditoriaPdf {
                 }
                 energiaTotal += (l.creditosRecebidosDeTerceiros ?? 0.0);
 
+                String statusTexto;
+                if (divergenciaAneel > 0) {
+                  statusTexto =
+                      'FORA ANEEL\n(${numero.format(divergenciaAneel)} kWh)';
+                } else if (desvio > 0) {
+                  statusTexto = 'ALERTA DESVIO\n(${numero.format(desvio)} kWh)';
+                } else {
+                  statusTexto = 'OK';
+                }
+
                 return [
                   DateFormat('MM/yyyy').format(l.dataReferencia),
                   numero.format(energiaTotal),
-                  numero.format(resumo.consumoRealLocal),
+                  numero.format(ciclo.consumoRealLocal),
                   moeda.format(l.valorFaturaR),
-                  '${resumo.sobraFisicaDoMes >= 0 ? "+" : ""}${numero.format(resumo.sobraFisicaDoMes)}',
-                  desvio > 0
-                      ? 'ALERTA DESVIO\n(${numero.format(desvio)} kWh)'
-                      : 'OK',
+                  '${ciclo.sobraFisicaDoMes >= 0 ? "+" : ""}${numero.format(ciclo.sobraFisicaDoMes)}',
+                  statusTexto,
                 ];
               }).toList(),
             ),
